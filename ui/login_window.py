@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import *
 from services.api_client import ApiClient
 from core.token_holder import TokenHolder
 from ui.main_window import MainWindow
+from core.token_storage import TokenStorage
 
 class LoginWindow(QWidget):
     def __init__(self):
@@ -26,12 +27,26 @@ class LoginWindow(QWidget):
 
         self.btn.clicked.connect(self.login)
 
+        token = TokenStorage.load()
+        if token:
+            from core.token_holder import TokenHolder
+            TokenHolder.set_token(token, 0)
+
+            self.main = MainWindow()
+            self.main.show()
+            self.close()
+
     def login(self):
         self.api.login(self.user.text(), self.pwd.text(), self.on_result)
 
+
     def on_result(self, data):
         if data.get("code") == 0:
+            token = data["token"]
+            from core.token_holder import TokenHolder
+
             TokenHolder.set_token(data["token"], data["expires_in"])
+            TokenStorage.save(token, expires_in_days=5)
             self.main = MainWindow()
             self.main.show()
             self.close()
