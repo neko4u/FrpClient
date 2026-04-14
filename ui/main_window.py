@@ -5,7 +5,6 @@ from core.frp_manager import FRPManager
 from core.config_manager import ConfigManager
 from ui.widgets.proxy_table import ProxyTable
 from core.token_storage import TokenStorage
-from ui.login_window import LoginWindow
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -99,6 +98,7 @@ class MainWindow(QMainWindow):
     def logout(self):
         self.frp.stop()
         TokenStorage.clear()
+        from ui.login_window import LoginWindow
         self.login = LoginWindow()
         self.login.show()
         self.close()
