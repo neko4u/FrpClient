@@ -1,10 +1,10 @@
 from PyQt6.QtWidgets import *
-from PyQt6.QtCore import QTimer
 
 from core.frp_manager import FRPManager
 from core.config_manager import ConfigManager
 from ui.widgets.proxy_table import ProxyTable
 from core.token_storage import TokenStorage
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -18,6 +18,7 @@ class MainWindow(QMainWindow):
             "resources/frpc.toml"
         )
         self.cfg = ConfigManager("resources/frpc.toml")
+        self.current_status = "stopped"
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("端口"))
         layout.addWidget(self.port)
 
+        # ===== 操作代理
         op_layout = QHBoxLayout()
 
         add_btn = QPushButton("添加隧道")
@@ -44,15 +46,15 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(op_layout)
 
-        # ====== proxy表
+        # ===== proxy表
         self.table = ProxyTable()
         layout.addWidget(self.table)
 
-        # ===== 状态指示器
+        # ===== 状态
         status_layout = QHBoxLayout()
 
         self.status_light = QLabel("●")
-        self.status_light.setStyleSheet("color: red; font-size: 20px;")
+        self.status_light.setStyleSheet("color: gray; font-size: 20px;")
 
         self.status_text = QLabel("未运行")
 
@@ -63,7 +65,7 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(status_layout)
 
-        # ====== 日志窗口
+        # ===== 日志
         layout.addWidget(QLabel("运行日志"))
 
         self.log_view = QTextEdit()
@@ -72,7 +74,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.log_view)
 
-        # ===== 启动/停止按钮
+        # ===== 启停按钮~
         run_layout = QHBoxLayout()
 
         self.start_btn = QPushButton("启动")
@@ -83,26 +85,26 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(run_layout)
 
-        # ======= logout
+        # ===== logout
         self.logout_btn = QPushButton("登出")
         self.logout_btn.setFixedWidth(100)
         layout.addWidget(self.logout_btn)
 
-        # ===== 信号
+        # ===== 信号绑定
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         self.save_btn.clicked.connect(self.save)
         add_btn.clicked.connect(self.add_proxy)
         self.logout_btn.clicked.connect(self.logout)
 
-        # ====== 定时刷新
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_all)
-        self.timer.start(2000)
+        self.frp.log_signal.connect(self.append_log)
+        self.frp.status_signal.connect(self.on_status_change)
 
+        # ===== 初始化
         self.load()
-        self.update_all()
-        self.update_buttons()
+        self.on_status_change("stopped")
+
+    # ================== 配置 ==================
 
     def load(self):
         addr, port = self.cfg.get_basic()
@@ -115,19 +117,58 @@ class MainWindow(QMainWindow):
         self.cfg.set_proxies(self.table.get_data())
         QMessageBox.information(self, "成功", "已保存")
 
+    # ================== 控制 ==================
+
     def start(self):
         self.log_view.clear()
-        QMessageBox.information(self, "FRP", self.frp.start())
-        self.update_all()
+
+        msg = self.frp.start()
+        QMessageBox.information(self, "FRP", msg)
 
     def stop(self):
         msg = self.frp.stop()
         self.log_view.append("=== 已停止 ===")
         QMessageBox.information(self, "FRP", msg)
-        self.update_all()
 
-    def update_status(self):
-        status = self.frp.conn_status
+    # ================== UI行为 ==================
+
+    def add_proxy(self):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+    def logout(self):
+        self.frp.stop()
+        TokenStorage.clear()
+
+        from ui.login_window import LoginWindow
+        self.login = LoginWindow()
+        self.login.show()
+        self.close()
+
+    # ================== UI更新 ==================
+
+    def update_buttons(self):
+        if self.current_status in ["connecting", "connected"]:
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+
+    def append_log(self, line):
+        self.log_view.append(line)
+        if self.log_view.document().blockCount() > 500:
+            cursor = self.log_view.textCursor()
+            cursor.movePosition(cursor.Start)
+            cursor.select(cursor.BlockUnderCursor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()
+
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def on_status_change(self, status):
+        self.current_status = status
 
         if status == "connecting":
             self.status_light.setStyleSheet("color: orange; font-size: 20px;")
@@ -145,36 +186,4 @@ class MainWindow(QMainWindow):
             self.status_light.setStyleSheet("color: gray; font-size: 20px;")
             self.status_text.setText("未运行")
 
-    def update_all(self):
-        self.update_status()
-        self.update_logs()
         self.update_buttons()
-
-    def update_logs(self):
-        logs = self.frp.logs
-
-        self.log_view.setPlainText("\n".join(logs))
-        scrollbar = self.log_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-    def add_proxy(self):
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-
-    def logout(self):
-        self.frp.stop()
-        TokenStorage.clear()
-        from ui.login_window import LoginWindow
-        self.login = LoginWindow()
-        self.login.show()
-        self.close()
-
-    def update_buttons(self):
-        status = self.frp.conn_status
-        if status in ["connecting", "connected"]:
-            self.start_btn.setEnabled(False)
-            self.stop_btn.setEnabled(True)
-        else:
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-    

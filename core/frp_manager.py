@@ -1,129 +1,114 @@
-import subprocess
-import psutil
+from PyQt6.QtCore import QProcess, QObject, pyqtSignal
 import os
-import threading
 
-class FRPManager:
+
+class FRPManager(QObject):
+    # ===== 信号 =====
+    log_signal = pyqtSignal(str)       # 实时日志
+    status_signal = pyqtSignal(str)    # 状态变化
+
     def __init__(self, frpc_path, config_path):
-        self.conn_status = "stopped"  
-        # stopped / connecting / connected / failed
+        super().__init__()
+
         self.frpc_path = frpc_path
         self.config_path = config_path
-        self.process = None
-        self.conn_status = "stopped"
-        self.logs = []
-        self._running = False
-        self.conn_status = "stopped"
 
+        self.process = QProcess()
+        self.logs = []
+        self.conn_status = "stopped"  # stopped / connecting / connected / failed
+
+        # ===== 绑定信号 =====
+        self.process.readyReadStandardOutput.connect(self._on_stdout)
+        self.process.readyReadStandardError.connect(self._on_stderr)
+        self.process.finished.connect(self._on_finished)
+
+    # ===== 启动 =====
     def start(self):
-        if self.process and self.process.poll() is None:
+        if self.process.state() == QProcess.ProcessState.Running:
             return "已运行"
 
         if not os.path.exists(self.frpc_path):
             return "frpc.exe 不存在"
-        self.logs = []
-        self._running = True
-        self.conn_status = "connecting"
 
-        try:
-            self.process = subprocess.Popen(
-                [self.frpc_path, "-c", self.config_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                text=True,
-                encoding="utf-8",
-                errors="ignore"
-            )
-            self.current_pid = self.process.pid
-        except Exception as e:
-            return f"启动失败: {e}"
-        threading.Thread(target=self._read_output, daemon=True).start()
-        threading.Thread(target=self._read_error, daemon=True).start()
+        self.logs = []
+        self.conn_status = "connecting"
+        self.status_signal.emit("connecting")
+
+        self.process.start(self.frpc_path, ["-c", self.config_path])
 
         return "启动成功"
 
+    # ===== 停止 =====
     def stop(self):
-        try:
-            if self.process.stdout:
-                self.process.stdout.close()
-            if self.process.stderr:
-                self.process.stderr.close()
-        except:
-            pass
-        if self.process:
-            self._running = False
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.terminate()
 
-            try:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-            except Exception:
+            # 等待退出
+            if not self.process.waitForFinished(2000):
                 self.process.kill()
-            self.process = None
+
             self.conn_status = "stopped"
-            
+            self.status_signal.emit("stopped")
+
             return "已停止"
+
         return "未运行"
 
-    def status(self):
-        if self.process and self.process.poll() is None:
-            p = psutil.Process(self.process.pid)
-            return f"运行中 PID={p.pid} CPU={p.cpu_percent(interval=0.1)}%"
-        return "未运行"
-    
-    def _read_output(self):
-        try:
-            proc = self.process
-            if proc is None:
-                return
-            for line in iter(proc.stdout.readline, ''):
-                if proc is None or proc.pid != self.current_pid:
-                    break
-                if not self._running:
-                    break
-                line = line.strip()
-                if line:
-                    self.logs.append(line)
-                    if not self._running:
-                        break
-                    low = line.lower()
-                    if "login to server success" in low or "start proxy success" in low:
-                        self.conn_status = "connected"
+    # ===== stdout =====
+    def _on_stdout(self):
+        data = self.process.readAllStandardOutput().data().decode(errors="ignore")
+        lines = data.splitlines()
 
-                    elif "connection refused" in low or "login failed" in low:
-                        self.conn_status = "failed"
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
 
-                    # 日志限制
-                    if len(self.logs) > 500:
-                        self.logs = self.logs[-500:]
-        except Exception as e:
-            self.logs.append(f"[READ_ERROR] {e}")
+            self.logs.append(line)
+            self.log_signal.emit(line)
 
+            low = line.lower()
 
-    def _read_error(self):
-        try:
-            proc = self.process
-            if proc is None:
-                return
+            # ===== 状态判断 =====
+            if "login to server success" in low or "start proxy success" in low:
+                if self.conn_status != "connected":
+                    self.conn_status = "connected"
+                    self.status_signal.emit("connected")
 
-            for line in iter(proc.stderr.readline, ''):
-                if proc is None or proc.pid != self.current_pid:
-                    break
-                if not self._running:
-                    break
-                line = line.strip()
-                if line:
-                    self.logs.append("[ERROR] " + line)
-                    if not self._running:
-                        break
-                    low = line.lower()
-                    if "connection refused" in low or "failed" in low:
-                        self.conn_status = "failed"
-                    if len(self.logs) > 500:
-                        self.logs = self.logs[-500:]
-        except Exception as e:
-            self.logs.append(f"[ERR_READ_FAIL] {e}")
+            elif "connection refused" in low or "login failed" in low:
+                if self.conn_status != "failed":
+                    self.conn_status = "failed"
+                    self.status_signal.emit("failed")
+
+        # ===== 限制日志长度 =====
+        if len(self.logs) > 500:
+            self.logs = self.logs[-500:]
+
+    # ===== stderr =====
+    def _on_stderr(self):
+        data = self.process.readAllStandardError().data().decode(errors="ignore")
+        lines = data.splitlines()
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            msg = "[ERROR] " + line
+            self.logs.append(msg)
+            self.log_signal.emit(msg)
+
+            if self.conn_status != "failed":
+                self.conn_status = "failed"
+                self.status_signal.emit("failed")
+
+        # ===== 限制日志长度 =====
+        if len(self.logs) > 500:
+            self.logs = self.logs[-500:]
+
+    # ===== 进程结束 =====
+    def _on_finished(self):
+        # 如果不是失败导致的退出，就标记为 stopped
+        if self.conn_status != "failed":
+            self.conn_status = "stopped"
+            self.status_signal.emit("stopped")
