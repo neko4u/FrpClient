@@ -35,9 +35,19 @@ class MainWindow(QMainWindow):
         # ====== proxy表
         self.table = ProxyTable()
         layout.addWidget(self.table)
-
         add_btn = QPushButton("添加隧道")
         layout.addWidget(add_btn)
+
+        # ====== 日志窗口
+        layout.addWidget(QLabel("运行日志"))
+
+        self.log_view = QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMinimumHeight(200)
+
+        layout.addWidget(self.log_view)
+
+
 
         # ======= 控制按钮
         btn_layout = QHBoxLayout()
@@ -66,7 +76,7 @@ class MainWindow(QMainWindow):
 
         # ====== 定时刷新
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_status)
+        self.timer.timeout.connect(self.update_all)
         self.timer.start(2000)
 
         self.load()
@@ -83,13 +93,27 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "成功", "已保存")
 
     def start(self):
+        self.log_view.clear()
         QMessageBox.information(self, "FRP", self.frp.start())
 
     def stop(self):
-        QMessageBox.information(self, "FRP", self.frp.stop())
+        msg = self.frp.stop()
+        self.log_view.append("=== 已停止 ===")
+        QMessageBox.information(self, "FRP", msg)
 
     def update_status(self):
         self.status.setText(self.frp.status())
+
+    def update_all(self):
+        self.update_status()
+        self.update_logs()
+
+    def update_logs(self):
+        logs = self.frp.logs
+
+        self.log_view.setPlainText("\n".join(logs))
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
 
     def add_proxy(self):
         row = self.table.rowCount()
