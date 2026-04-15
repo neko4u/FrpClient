@@ -26,17 +26,42 @@ class MainWindow(QMainWindow):
         # ===== 基础配置
         self.addr = QLineEdit()
         self.port = QLineEdit()
+        self.addr.setReadOnly(True)
+        self.port.setReadOnly(True)
 
         layout.addWidget(QLabel("服务器地址"))
         layout.addWidget(self.addr)
         layout.addWidget(QLabel("端口"))
         layout.addWidget(self.port)
 
+        op_layout = QHBoxLayout()
+
+        add_btn = QPushButton("添加隧道")
+        self.save_btn = QPushButton("保存配置")
+
+        op_layout.addWidget(add_btn)
+        op_layout.addWidget(self.save_btn)
+
+        layout.addLayout(op_layout)
+
         # ====== proxy表
         self.table = ProxyTable()
         layout.addWidget(self.table)
-        add_btn = QPushButton("添加隧道")
-        layout.addWidget(add_btn)
+
+        # ===== 状态指示器
+        status_layout = QHBoxLayout()
+
+        self.status_light = QLabel("●")
+        self.status_light.setStyleSheet("color: red; font-size: 20px;")
+
+        self.status_text = QLabel("未连接")
+
+        status_layout.addWidget(QLabel("运行状态:"))
+        status_layout.addWidget(self.status_light)
+        status_layout.addWidget(self.status_text)
+        status_layout.addStretch()
+
+        layout.addLayout(status_layout)
 
         # ====== 日志窗口
         layout.addWidget(QLabel("运行日志"))
@@ -47,25 +72,21 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.log_view)
 
+        # ===== 启动/停止按钮
+        run_layout = QHBoxLayout()
 
-
-        # ======= 控制按钮
-        btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("启动")
         self.stop_btn = QPushButton("停止")
-        self.save_btn = QPushButton("保存配置")
+
+        run_layout.addWidget(self.start_btn)
+        run_layout.addWidget(self.stop_btn)
+
+        layout.addLayout(run_layout)
+
+        # ======= logout
         self.logout_btn = QPushButton("登出")
-
-        btn_layout.addWidget(self.start_btn)
-        btn_layout.addWidget(self.stop_btn)
-        btn_layout.addWidget(self.save_btn)
+        self.logout_btn.setFixedWidth(100)
         layout.addWidget(self.logout_btn)
-
-        layout.addLayout(btn_layout)
-
-        # ===== 状态
-        self.status = QLabel("状态: 未运行")
-        layout.addWidget(self.status)
 
         # ===== 信号
         self.start_btn.clicked.connect(self.start)
@@ -80,6 +101,8 @@ class MainWindow(QMainWindow):
         self.timer.start(2000)
 
         self.load()
+        self.update_all()
+        self.update_buttons()
 
     def load(self):
         addr, port = self.cfg.get_basic()
@@ -102,11 +125,18 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "FRP", msg)
 
     def update_status(self):
-        self.status.setText(self.frp.status())
+        running = self.frp.process and self.frp.process.poll() is None
+        if running:
+            self.status_light.setStyleSheet("color: green; font-size: 20px;")
+            self.status_text.setText("运行中")
+        else:
+            self.status_light.setStyleSheet("color: red; font-size: 20px;")
+            self.status_text.setText("未运行")
 
     def update_all(self):
         self.update_status()
         self.update_logs()
+        self.update_buttons()
 
     def update_logs(self):
         logs = self.frp.logs
@@ -126,3 +156,14 @@ class MainWindow(QMainWindow):
         self.login = LoginWindow()
         self.login.show()
         self.close()
+
+    def update_buttons(self):
+        running = self.frp.process and self.frp.process.poll() is None
+
+        if running:
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+    
