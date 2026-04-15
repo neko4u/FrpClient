@@ -5,11 +5,15 @@ import threading
 
 class FRPManager:
     def __init__(self, frpc_path, config_path):
+        self.conn_status = "stopped"  
+        # stopped / connecting / connected / failed
         self.frpc_path = frpc_path
         self.config_path = config_path
         self.process = None
+        self.conn_status = "stopped"
         self.logs = []
         self._running = False
+        self.conn_status = "stopped"
 
     def start(self):
         if self.process and self.process.poll() is None:
@@ -19,6 +23,7 @@ class FRPManager:
             return "frpc.exe 不存在"
         self.logs = []
         self._running = True
+        self.conn_status = "connecting"
 
         try:
             self.process = subprocess.Popen(
@@ -31,6 +36,7 @@ class FRPManager:
                 encoding="utf-8",
                 errors="ignore"
             )
+            self.current_pid = self.process.pid
         except Exception as e:
             return f"启动失败: {e}"
         threading.Thread(target=self._read_output, daemon=True).start()
@@ -39,16 +45,26 @@ class FRPManager:
         return "启动成功"
 
     def stop(self):
+        try:
+            if self.process.stdout:
+                self.process.stdout.close()
+            if self.process.stderr:
+                self.process.stderr.close()
+        except:
+            pass
         if self.process:
             self._running = False
 
             try:
-
                 self.process.terminate()
-                self.process.wait(timeout=3)
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
             except Exception:
                 self.process.kill()
             self.process = None
+            self.conn_status = "stopped"
             
             return "已停止"
         return "未运行"
@@ -61,12 +77,27 @@ class FRPManager:
     
     def _read_output(self):
         try:
-            for line in iter(self.process.stdout.readline, ''):
+            proc = self.process
+            if proc is None:
+                return
+            for line in iter(proc.stdout.readline, ''):
+                if proc is None or proc.pid != self.current_pid:
+                    break
                 if not self._running:
                     break
                 line = line.strip()
                 if line:
                     self.logs.append(line)
+                    if not self._running:
+                        break
+                    low = line.lower()
+                    if "login to server success" in low or "start proxy success" in low:
+                        self.conn_status = "connected"
+
+                    elif "connection refused" in low or "login failed" in low:
+                        self.conn_status = "failed"
+
+                    # 日志限制
                     if len(self.logs) > 500:
                         self.logs = self.logs[-500:]
         except Exception as e:
@@ -75,12 +106,23 @@ class FRPManager:
 
     def _read_error(self):
         try:
-            for line in iter(self.process.stderr.readline, ''):
+            proc = self.process
+            if proc is None:
+                return
+
+            for line in iter(proc.stderr.readline, ''):
+                if proc is None or proc.pid != self.current_pid:
+                    break
                 if not self._running:
                     break
                 line = line.strip()
                 if line:
                     self.logs.append("[ERROR] " + line)
+                    if not self._running:
+                        break
+                    low = line.lower()
+                    if "connection refused" in low or "failed" in low:
+                        self.conn_status = "failed"
                     if len(self.logs) > 500:
                         self.logs = self.logs[-500:]
         except Exception as e:

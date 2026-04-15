@@ -4,7 +4,7 @@ import time
 import hashlib
 import platform
 
-SAVE_PATH = "token.json"
+SAVE_PATH = "resources/token.json"
 
 def get_device_id():
     # 防止复制

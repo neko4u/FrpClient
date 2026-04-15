@@ -68,3 +68,6 @@ htmlcov/
 
 #toml settings
 /resources/*.toml
+
+#toml token
+/resources/*.token

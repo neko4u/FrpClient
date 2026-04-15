@@ -54,7 +54,7 @@ class MainWindow(QMainWindow):
         self.status_light = QLabel("●")
         self.status_light.setStyleSheet("color: red; font-size: 20px;")
 
-        self.status_text = QLabel("未连接")
+        self.status_text = QLabel("未运行")
 
         status_layout.addWidget(QLabel("运行状态:"))
         status_layout.addWidget(self.status_light)
@@ -118,19 +118,31 @@ class MainWindow(QMainWindow):
     def start(self):
         self.log_view.clear()
         QMessageBox.information(self, "FRP", self.frp.start())
+        self.update_all()
 
     def stop(self):
         msg = self.frp.stop()
         self.log_view.append("=== 已停止 ===")
         QMessageBox.information(self, "FRP", msg)
+        self.update_all()
 
     def update_status(self):
-        running = self.frp.process and self.frp.process.poll() is None
-        if running:
+        status = self.frp.conn_status
+
+        if status == "connecting":
+            self.status_light.setStyleSheet("color: orange; font-size: 20px;")
+            self.status_text.setText("连接中")
+
+        elif status == "connected":
             self.status_light.setStyleSheet("color: green; font-size: 20px;")
-            self.status_text.setText("运行中")
-        else:
+            self.status_text.setText("已连接")
+
+        elif status == "failed":
             self.status_light.setStyleSheet("color: red; font-size: 20px;")
+            self.status_text.setText("连接失败")
+
+        else:
+            self.status_light.setStyleSheet("color: gray; font-size: 20px;")
             self.status_text.setText("未运行")
 
     def update_all(self):
@@ -158,9 +170,8 @@ class MainWindow(QMainWindow):
         self.close()
 
     def update_buttons(self):
-        running = self.frp.process and self.frp.process.poll() is None
-
-        if running:
+        status = self.frp.conn_status
+        if status in ["connecting", "connected"]:
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
         else:
