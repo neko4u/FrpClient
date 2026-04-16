@@ -4,8 +4,8 @@ import os
 
 class FRPManager(QObject):
     # ===== 信号 =====
-    log_signal = pyqtSignal(str)       # 实时日志
-    status_signal = pyqtSignal(str)    # 状态变化
+    log_signal = pyqtSignal(str)
+    status_signal = pyqtSignal(str)
 
     def __init__(self, frpc_path, config_path):
         super().__init__()
@@ -22,7 +22,6 @@ class FRPManager(QObject):
         self.process.readyReadStandardError.connect(self._on_stderr)
         self.process.finished.connect(self._on_finished)
 
-    # ===== 启动 =====
     def start(self):
         if self.process.state() == QProcess.ProcessState.Running:
             return "已运行"
@@ -38,12 +37,9 @@ class FRPManager(QObject):
 
         return "启动成功"
 
-    # ===== 停止 =====
     def stop(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:
             self.process.terminate()
-
-            # 等待退出
             if not self.process.waitForFinished(2000):
                 self.process.kill()
 
@@ -68,8 +64,6 @@ class FRPManager(QObject):
             self.log_signal.emit(line)
 
             low = line.lower()
-
-            # ===== 状态判断 =====
             if "login to server success" in low or "start proxy success" in low:
                 if self.conn_status != "connected":
                     self.conn_status = "connected"
@@ -79,8 +73,6 @@ class FRPManager(QObject):
                 if self.conn_status != "failed":
                     self.conn_status = "failed"
                     self.status_signal.emit("failed")
-
-        # ===== 限制日志长度 =====
         if len(self.logs) > 500:
             self.logs = self.logs[-500:]
 
@@ -101,14 +93,10 @@ class FRPManager(QObject):
             if self.conn_status != "failed":
                 self.conn_status = "failed"
                 self.status_signal.emit("failed")
-
-        # ===== 限制日志长度 =====
         if len(self.logs) > 500:
             self.logs = self.logs[-500:]
 
-    # ===== 进程结束 =====
     def _on_finished(self):
-        # 如果不是失败导致的退出，就标记为 stopped
         if self.conn_status != "failed":
             self.conn_status = "stopped"
             self.status_signal.emit("stopped")
