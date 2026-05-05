@@ -1,5 +1,0 @@
-{
-    "frp_token_api": "http://sorielflow.com/api/FrpToken",
-    "frpc_path": "./bin/frpc",
-    "frpc_config_path": "./frpc.toml"
-}
