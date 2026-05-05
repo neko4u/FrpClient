@@ -7,7 +7,6 @@ import platform
 SAVE_PATH = "resources/token.json"
 
 def get_device_id():
-    # 防止复制
     raw = platform.node() + platform.processor()
     return hashlib.sha256(raw.encode()).hexdigest()
 
