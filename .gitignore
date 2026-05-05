@@ -71,3 +71,4 @@ htmlcov/
 
 #toml token
 /resources/*.token
+/resources/*.json
