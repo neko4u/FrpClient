@@ -1,8 +1,12 @@
 from PyQt6.QtWidgets import *
+import os
 
 from core.frp_manager import FRPManager
 from core.config_manager import ConfigManager
+from core.paths import resource_dir
+from core.token_holder import TokenHolder
 from ui.widgets.proxy_table import ProxyTable
+
 # from core.token_storage import TokenStorage
 
 
@@ -14,10 +18,12 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 900, 700)
 
         self.frp = FRPManager(
-            "resources/frpc.exe",
-            "resources/frpc.toml"
+            os.path.join(resource_dir(), "frpc.exe"),
+            os.path.join(resource_dir(), "frpc.toml"),
+            TokenHolder.get_uid()
         )
-        self.cfg = ConfigManager("resources/frpc.toml")
+
+        self.cfg = ConfigManager(os.path.join(resource_dir(), "frpc.toml"))
         self.current_status = "stopped"
 
         central = QWidget()

@@ -7,11 +7,13 @@ class FRPManager(QObject):
     log_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
 
-    def __init__(self, frpc_path, config_path):
+    def __init__(self, frpc_path, config_path, uid=""):
         super().__init__()
 
         self.frpc_path = frpc_path
         self.config_path = config_path
+        self.uid = uid
+
 
         self.process = QProcess()
         self.logs = []
@@ -33,9 +35,13 @@ class FRPManager(QObject):
         self.conn_status = "connecting"
         self.status_signal.emit("connecting")
 
-        self.process.start(self.frpc_path, ["-c", self.config_path])
+        args = ["-c", self.config_path]
+        if self.uid:
+            args += ["--uid", self.uid]
+        self.process.start(self.frpc_path, args)
 
         return "启动成功"
+
 
     def stop(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:

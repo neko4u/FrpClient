@@ -1,6 +1,8 @@
 import toml
 import json
+import os
 from core.api_client import APIs
+from core.paths import resource_dir
 
 class ConfigManager:
     def __init__(self, path):
@@ -48,7 +50,7 @@ class ConfigManager:
 
     def update_token_from_api(self, user_token):
         try:
-            with open("resources/config.json", "r", encoding="utf-8") as f:
+            with open(os.path.join(resource_dir(), "config.json"), "r", encoding="utf-8") as f:
                 cfg = json.load(f)
 
             api_url = cfg.get("frp_token_api")

@@ -1,8 +1,13 @@
 from PyQt6.QtWidgets import *
+import os
 from services.api_client import ApiClient
 from core.token_holder import TokenHolder
 from ui.main_window import MainWindow
 from core.token_storage import TokenStorage
+from core.config_manager import ConfigManager
+from core.paths import resource_dir
+from core.jwt_utils import get_uid_from_token
+
 
 class LoginWindow(QWidget):
     def __init__(self):
@@ -46,7 +51,17 @@ class LoginWindow(QWidget):
             from core.token_holder import TokenHolder
 
             TokenHolder.set_token(data["token"], data["expires_in"])
-            TokenStorage.save(token, expires_in_days=5)
+            TokenHolder.set_uid(get_uid_from_token(token))
+            TokenStorage.save(token, expires_in_days=7)
+
+
+            # 登录成功后立即从 API 拉取 frp token 写入 frpc.toml,保证开箱即用
+            try:
+                cfg = ConfigManager(os.path.join(resource_dir(), "frpc.toml"))
+                cfg.update_token_from_api(token)
+            except Exception as e:
+                print("更新 frp token 失败:", e)
+
             self.main = MainWindow()
             self.main.show()
             self.close()

@@ -4,7 +4,9 @@ import time
 import hashlib
 import platform
 
-SAVE_PATH = "resources/token.json"
+from core.paths import resource_dir
+
+SAVE_PATH = os.path.join(resource_dir(), "token.json")
 
 def get_device_id():
     raw = platform.node() + platform.processor()
