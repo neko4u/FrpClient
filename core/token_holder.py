@@ -1,7 +1,7 @@
 class TokenHolder:
     token = ""
     expires_in = 0
-    uid = ""  # fork: 登录后从 JWT 解出, 仅存内存, 不落盘
+    uid = ""  # fork: 登录后从 JWT 解出
 
     @classmethod
     def set_token(cls, token, expires_in):
