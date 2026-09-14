@@ -44,17 +44,20 @@ class FRPManager(QObject):
 
 
     def stop(self):
+        """异步停止: terminate 后等 finished 信号自动发 stopped, 3s 未退出则强杀。
+        不阻塞 UI, 便于主窗口在关闭过程中展示动画。"""
+        if self.process.state() == QProcess.ProcessState.NotRunning:
+            return "未运行"
+
+        self.process.terminate()
+        # 兜底: 3 秒后仍未退出则强杀
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(3000, self._kill_if_alive)
+        return "正在停止"
+
+    def _kill_if_alive(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:
-            self.process.terminate()
-            if not self.process.waitForFinished(2000):
-                self.process.kill()
-
-            self.conn_status = "stopped"
-            self.status_signal.emit("stopped")
-
-            return "已停止"
-
-        return "未运行"
+            self.process.kill()
 
     # ===== stdout =====
     def _on_stdout(self):

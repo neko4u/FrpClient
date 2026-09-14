@@ -6,13 +6,13 @@
   error(str)             错误信息
   session_closed(dict)   会话被服务器关闭(含原因/余额)
 """
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
 
 from core.session_api import SessionAPI
 from core.token_holder import TokenHolder
 
 HEARTBEAT_INTERVAL_MS = 30 * 1000   # 30s 心跳
-COUNTDOWN_INTERVAL_MS = 1000        # 1s 倒计时刷新
+COUNTDOWN_INTERVAL_MS = 200         # 倒计时轮询 200ms(精确), 秒变才发信号 -> 平滑
 
 
 class SessionManager(QObject):
@@ -20,6 +20,7 @@ class SessionManager(QObject):
     countdown_changed = pyqtSignal(int)
     error = pyqtSignal(str)
     session_closed = pyqtSignal(dict)   # {"reason": str, "balance": int}
+    initialized = pyqtSignal()          # status 首次查询完成(成功/失败), 用于移除启动遮罩
 
     def __init__(self, api=None):
         super().__init__()
@@ -37,7 +38,9 @@ class SessionManager(QObject):
 
         self._cd_timer = QTimer(self)
         self._cd_timer.setInterval(COUNTDOWN_INTERVAL_MS)
+        self._cd_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 精确计时, 避免丢 tick
         self._cd_timer.timeout.connect(self._tick_countdown)
+        self._last_cd_sec = None  # 上次发出的剩余秒, 秒变才 emit
 
     # ---------- 对外接口 ----------
 
@@ -117,13 +120,12 @@ class SessionManager(QObject):
         if data.get("code") != 0:
             # 401 等 -> token 失效
             self.error.emit(data.get("msg") or data.get("message") or "状态查询失败")
+            self.initialized.emit()   # 查询结束(失败也要撤遮罩)
             return
         self._calibrate_clock(data)
         self._balance = data.get("balance_seconds", 0)
-        # 无论是否有会话, 都让 UI 刷新一次余额(登录后主动显示)
         self.countdown_changed.emit(self._balance)
         if data.get("has_session"):
-            # 服务器上有活跃会话 -> 接管(用于掉线重登场景)
             self.session_id = data["session_id"]
             self.stop_time_ts = data["stop_time_ts"]
             self._started_at = data.get("start_ts", 0)
@@ -133,15 +135,14 @@ class SessionManager(QObject):
             self._tick_countdown()
         else:
             self._set_status("idle")
+        self.initialized.emit()       # 查询完成 -> 撤遮罩
 
     def _on_heartbeat(self, data):
         if data.get("code") != 0:
-            # 会话可能已失效 -> 停止并上报
             self._fail_session(data.get("msg") or "心跳失败")
             return
         self._calibrate_clock(data)
         if data.get("closed"):
-            # 服务器判定到期/已关 -> 结束
             self._balance = data.get("balance_seconds", self._balance)
             self._teardown()
             self.session_closed.emit({"reason": "balance_exhausted",
@@ -155,11 +156,8 @@ class SessionManager(QObject):
         if data.get("code") != 0:
             self.error.emit(data.get("msg") or "停止会话失败")
         self._calibrate_clock(data)
-        # 关键: 结算后必须用服务器返回的真实余额更新缓存,
-        # 否则 UI 会显示旧的账户余额, 下次 start 又跳回新余额
         if "balance_seconds" in data:
             self._balance = data["balance_seconds"]
-        # 结算后刷新 UI 余额显示
         self.countdown_changed.emit(self._balance)
         self._teardown()
         self._set_status("idle")
@@ -173,7 +171,10 @@ class SessionManager(QObject):
         self.api.heartbeat(token, self.session_id, self._on_heartbeat)
 
     def _tick_countdown(self):
-        self.countdown_changed.emit(self.remaining_seconds)
+        sec = self.remaining_seconds
+        if sec != self._last_cd_sec:
+            self._last_cd_sec = sec
+            self.countdown_changed.emit(sec)
 
     def _fail_session(self, msg):
         """心跳失败/会话失效 -> 停表并报错(不自动重连, 由用户重试)"""

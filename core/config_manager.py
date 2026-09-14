@@ -34,6 +34,34 @@ class ConfigManager:
         data["proxies"] = proxies
         self.save(data)
 
+    # ---- fork: 单隧道"本地端口"读写(需求: 仅一条通道, 远程端口由服务器下发, 用户不可见) ----
+    DEFAULT_LOCAL_PORT = 7777
+
+    def get_local_port(self):
+        """读取第一条隧道的 localPort, 无隧道/无配置时返回默认 7777"""
+        proxies = self.get_proxies()
+        if proxies:
+            return int(proxies[0].get("localPort", self.DEFAULT_LOCAL_PORT))
+        return self.DEFAULT_LOCAL_PORT
+
+    def set_local_port(self, port):
+        """只更新第一条隧道的 localPort(其余字段保持不动), 无隧道则补建默认隧道"""
+        data = self.load()
+        proxies = data.get("proxies", [])
+
+        if proxies:
+            proxies[0]["localPort"] = int(port)
+        else:
+            data["proxies"] = [{
+                "name": "默认链接",
+                "type": "tcp",
+                "localIP": "127.0.0.1",
+                "localPort": int(port),
+                "remotePort": 6000,   # 占位, 后期由服务器下发覆盖
+            }]
+        data["proxies"] = proxies
+        self.save(data)
+
     def get_token(self):
         data = self.load()
         return data.get("auth", {}).get("token")

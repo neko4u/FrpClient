@@ -42,8 +42,18 @@ class LoginWindow(QWidget):
             self.close()
 
     def login(self):
+        # 请求期间禁用交互, 防止重复提交/误操作
+        self._set_busy(True)
         self.api.login(self.user.text(), self.pwd.text(), self.on_result)
 
+    def _set_busy(self, busy):
+        """busy=True: 禁用输入与按钮并显示'登录中...'; False: 恢复"""
+        for w in (self.user, self.pwd, self.btn):
+            w.setEnabled(not busy)
+        if busy:
+            self.btn.setText("登录中...")
+        else:
+            self.btn.setText("登录")
 
     def on_result(self, data):
         if data.get("code") == 0:
@@ -66,4 +76,6 @@ class LoginWindow(QWidget):
             self.main.show()
             self.close()
         else:
+            # 失败: 恢复交互并提示
+            self._set_busy(False)
             QMessageBox.warning(self, "失败", data.get("message"))
