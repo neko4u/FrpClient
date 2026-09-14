@@ -62,9 +62,62 @@ class ConfigManager:
         data["proxies"] = proxies
         self.save(data)
 
+        data["proxies"] = proxies
+        self.save(data)
+
+    def get_remote_port(self):
+        """读取第一条隧道的 remotePort(0 表示未设置)"""
+        proxies = self.get_proxies()
+        if proxies:
+            return int(proxies[0].get("remotePort", 0))
+        return 0
+
+    def set_remote_port(self, port):
+        """写入第一条隧道的 remotePort(连接前由服务器下发的端口覆盖)"""
+        data = self.load()
+        proxies = data.get("proxies", [])
+        if proxies:
+            proxies[0]["remotePort"] = int(port)
+        else:
+            proxies = [{
+                "name": "默认链接",
+                "type": "tcp",
+                "localIP": "127.0.0.1",
+                "localPort": self.DEFAULT_LOCAL_PORT,
+                "remotePort": int(port),
+            }]
+        data["proxies"] = proxies
+        self.save(data)
+
+    def get_remote_port(self):
+        """读取第一条隧道的 remotePort(0 表示未设置)"""
+        proxies = self.get_proxies()
+        if proxies:
+            return int(proxies[0].get("remotePort", 0))
+        return 0
+
+    def set_remote_port(self, port):
+        """写入第一条隧道的 remotePort(连接前由服务器下发的端口覆盖)"""
+        data = self.load()
+        proxies = data.get("proxies", [])
+        if proxies:
+            proxies[0]["remotePort"] = int(port)
+        else:
+            proxies = [{
+                "name": "默认链接",
+                "type": "tcp",
+                "localIP": "127.0.0.1",
+                "localPort": self.DEFAULT_LOCAL_PORT,
+                "remotePort": int(port),
+            }]
+        data["proxies"] = proxies
+        self.save(data)
+
     def get_token(self):
         data = self.load()
         return data.get("auth", {}).get("token")
+
+
 
     def set_token(self, token):
         data = self.load()

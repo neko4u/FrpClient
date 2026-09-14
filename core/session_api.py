@@ -71,7 +71,7 @@ class SessionAPI:
         finally:
             reply.deleteLater()
 
-    # ---------------- 会话接口 ----------------
+    # ---------------- 会话接口 ------
 
     def start(self, token, callback):
         """开启会话（门禁：成功后才能启动 frpc）"""
@@ -90,3 +90,33 @@ class SessionAPI:
     def status(self, token, callback):
         """查询当前会话与余额（启动时同步用）"""
         self._get("/api/frp_session/status/", token, callback)
+
+    # ---------------- 远程端口租赁 -----
+
+    def allocate_port(self, token, callback):
+        """分配远程端口（点"连接"时调用；需已开启时长）"""
+        self._post_json("/api/frp_port/allocate/", token, {}, callback)
+
+    def release_port(self, token, callback):
+        """释放远程端口（断开连接时调用）"""
+        self._post_json("/api/frp_port/release/", token, {}, callback)
+
+    def current_port(self, token, callback):
+        """查询当前端口（启动/恢复时用）"""
+        self._get("/api/frp_port/", token, callback)
+
+
+    # ---------------- 远程端口租赁 ----------------
+
+    def allocate_port(self, token, callback):
+        """分配远程端口（点"连接"时调用；需已开启时长）"""
+        self._post_json("/api/frp_port/allocate/", token, {}, callback)
+
+    def release_port(self, token, callback):
+        """释放远程端口（断开连接时调用）"""
+        self._post_json("/api/frp_port/release/", token, {}, callback)
+
+    def current_port(self, token, callback):
+        """查询当前端口（启动/恢复时用）"""
+        self._get("/api/frp_port/", token, callback)
+
