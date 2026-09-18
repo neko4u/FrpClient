@@ -16,7 +16,7 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QLineEdit, QTextEdit,
                              QToolButton, QMenu, QMessageBox,
-                             QApplication, QDialog)
+                             QApplication, QDialog, QGraphicsDropShadowEffect)
 from PyQt6.QtGui import QIntValidator, QPainter, QColor
 from PyQt6.QtCore import Qt, QTimer, QPoint
 import os
@@ -27,8 +27,79 @@ from core.paths import resource_dir
 from core.token_holder import TokenHolder
 from core.token_storage import TokenStorage
 from core.session_manager import SessionManager
+from ui.frosted import apply_frosted
 
-# 注: ProxyTable 代码保留于 ui/widgets/proxy_table.py, 当前 UI 不使用(需求4)
+# 磨砂窗口里的弹出菜单必须有不透明背景, 否则会渲染成黑背景
+MENU_QSS = """
+QMenu{background:#ffffff;border:1px solid #d0d5dd;border-radius:8px;padding:6px 0;}
+QMenu::item{padding:8px 22px;font-size:13px;color:#2b3445;}
+QMenu::item:selected{background:#eaf6ff;}
+QMenu::item:disabled{color:#9aa5b5;}
+QMenu::separator{height:1px;background:#eceff3;margin:4px 12px;}
+"""
+
+# ================= 可点击按钮的立体样式 =================
+# 正常可点击: 白底渐变 + 描边 + 投影, 提示"可以点"
+BTN_QSS = """
+QPushButton{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #eef2f7);
+    border:1px solid #cfd8e3;
+    border-radius:6px;
+    padding:4px 14px;
+    font-size:13px;
+    color:#25303f;
+}
+QPushButton:hover{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #f6faff);
+    border:1px solid #9fc0e8;
+}
+QPushButton:pressed{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #e6ebf2, stop:1 #f2f6fa);
+    border:1px solid #9fc0e8;
+}
+QPushButton:disabled{
+    background:#f2f4f7;
+    color:#aab2bf;
+    border:1px solid #e3e8ef;
+}
+"""
+
+# 已开启时长(暂停时长按钮)用淡红版
+BTN_ACTIVE_QSS = """
+QPushButton{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #ffd9d9);
+    border:1px solid #e8b4b4;
+    border-radius:6px;
+    padding:4px 14px;
+    font-size:13px;
+    font-weight:bold;
+    color:#8a2b2b;
+}
+QPushButton:hover{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffffff, stop:1 #ffc9c9);
+    border:1px solid #dda0a0;
+}
+QPushButton:pressed{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffe3e3, stop:1 #ffd0d0);
+    border:1px solid #dda0a0;
+}
+"""
+
+
+def add_soft_shadow(btn, blur=14, dy=3, alpha=110):
+# 投影样式
+    eff = QGraphicsDropShadowEffect(btn)
+    eff.setBlurRadius(blur)
+    eff.setColor(QColor(30, 60, 110, alpha))
+    eff.setOffset(0, dy)
+    btn.setGraphicsEffect(eff)
+
+    holder = QWidget()
+    holder.setStyleSheet("background:transparent;")
+    lay = QHBoxLayout(holder)
+    lay.setContentsMargins(6, 6, 12, 10)     # 给投影留空间
+    lay.addWidget(btn)
+    return holder
 
 
 class FillButton(QPushButton):
@@ -147,7 +218,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("sorielconnection")
+        apply_frosted(self)
+
         self.setGeometry(100, 100, 760, 480)
+
 
         # ===== 核心管理器 =====
         self.session = SessionManager()
@@ -168,7 +242,10 @@ class MainWindow(QMainWindow):
         self.log_win = None
 
         central = QWidget()
+        central.setStyleSheet("background:transparent;")
         self.setCentralWidget(central)
+
+
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -177,7 +254,9 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_menu_bar())
 
         body = QWidget()
+        body.setStyleSheet("background:transparent;")
         body_lay = QVBoxLayout(body)
+
         body_lay.setContentsMargins(16, 12, 16, 12)
         root.addWidget(body, 1)
 
@@ -187,17 +266,23 @@ class MainWindow(QMainWindow):
 
         # 剩余时间模块(右侧, 固定 X天X时X分X秒)
         time_box = QHBoxLayout()
+        time_box.setSpacing(0)
         time_box.addWidget(QLabel("剩余可用时长:"))
+        time_box.addSpacing(10)
         self.time_label = QLabel("0天0时0分0秒")
         self.time_label.setStyleSheet(
             "font-size: 18px; font-weight: bold; color: black;")
+        self.time_label.setFixedWidth(210)
         time_box.addWidget(self.time_label)
         top.addLayout(time_box)
+
 
         self.session_btn = QPushButton("开启时长")
         self.session_btn.setFixedHeight(34)
         self.session_btn.setMinimumWidth(110)
-        top.addWidget(self.session_btn)
+        self.session_btn.setStyleSheet(BTN_QSS)
+        top.addWidget(add_soft_shadow(self.session_btn))
+
 
         # 头像(点击弹层: 用户ID + 登出; 用 QPushButton 手动 popup, 无下箭头)
         self.avatar_btn = QPushButton("头")
@@ -217,10 +302,11 @@ class MainWindow(QMainWindow):
         # ================= 服务器连接区 =================
         conn_row = QHBoxLayout()
         conn_row.addWidget(QLabel("服务器连接:"))
-
         self.frp_btn = FillButton("连接")
         self.frp_btn.setFixedWidth(110)
-        conn_row.addWidget(self.frp_btn)
+        self.frp_btn.setStyleSheet(BTN_QSS)
+        conn_row.addWidget(add_soft_shadow(self.frp_btn))
+
 
         self.status_light = QLabel("●")
         self.status_light.setStyleSheet("color: gray; font-size: 16px;")
@@ -241,24 +327,28 @@ class MainWindow(QMainWindow):
         self.copy_btn = QPushButton("复制")
         self.copy_btn.setFixedWidth(56)
         self.copy_btn.setEnabled(False)
+        self.copy_btn.setStyleSheet(BTN_QSS)
         self.copy_btn.clicked.connect(self.copy_addr)
-        addr_row.addWidget(self.copy_btn)
+        addr_row.addWidget(add_soft_shadow(self.copy_btn))
+
         addr_row.addStretch()
         body_lay.addLayout(addr_row)
         body_lay.addSpacing(8)
 
-        # ================= 本地端口(可编辑, 仅数字) =================
+        # ================= 本地端口(主页仅展示, 点"编辑"弹子页面修改) =================
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel("本地端口:"))
 
-        self.port_edit = QLineEdit()
-        self.port_edit.setFixedWidth(120)
-        self.port_edit.setValidator(QIntValidator(1, 65535, self))
-        port_row.addWidget(self.port_edit)
+        self.port_label = QLabel("7777")
+        self.port_label.setFixedWidth(120)
+        self.port_label.setStyleSheet("font-size:14px;color:#333;")
+        port_row.addWidget(self.port_label)
 
-        self.save_port_btn = QPushButton("保存")
-        self.save_port_btn.setFixedWidth(80)
-        port_row.addWidget(self.save_port_btn)
+        self.edit_port_btn = QPushButton("编辑")
+        self.edit_port_btn.setFixedWidth(80)
+        self.edit_port_btn.setFixedHeight(30)
+        self.edit_port_btn.setStyleSheet(BTN_QSS)
+        port_row.addWidget(add_soft_shadow(self.edit_port_btn))
 
         port_row.addStretch()
         body_lay.addLayout(port_row)
@@ -268,7 +358,8 @@ class MainWindow(QMainWindow):
         # ================= 信号绑定 =================
         self.session_btn.clicked.connect(self.toggle_session)
         self.frp_btn.clicked.connect(self.toggle_frp)
-        self.save_port_btn.clicked.connect(self.save_port)
+        self.edit_port_btn.clicked.connect(self.open_port_dialog)
+
 
         self.session.status_changed.connect(self.on_session_status)
         self.session.countdown_changed.connect(self.on_countdown)
@@ -321,7 +412,9 @@ class MainWindow(QMainWindow):
 
     def _build_menu_bar(self):
         bar = QWidget()
-        bar.setStyleSheet("background:#f0f0f0;")
+        bar.setStyleSheet("background:transparent;")
+
+
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(12, 6, 12, 6)
 
@@ -342,6 +435,8 @@ class MainWindow(QMainWindow):
             "QToolButton{border:none;font-size:13px;color:#333;padding:2px 6px;}"
             "QToolButton::menu-indicator{image:none;}")
         menu = QMenu(about_btn)
+        menu.setStyleSheet(MENU_QSS)
+
         act_log = menu.addAction("运行日志")
         menu.addSeparator()
         act_update = menu.addAction("检查更新")
@@ -358,6 +453,8 @@ class MainWindow(QMainWindow):
     def _build_avatar_menu(self):
         """头像弹层: 用户ID + 登出; 点击外部自动隐藏"""
         menu = QMenu(self.avatar_btn)
+        menu.setStyleSheet(MENU_QSS)
+
         uid = TokenHolder.get_uid() or "-"
         act_uid = menu.addAction(f"用户ID: {uid}")
         act_uid.setEnabled(False)
@@ -376,20 +473,62 @@ class MainWindow(QMainWindow):
 
     def load(self):
         port = self.cfg.get_local_port()
-        self.port_edit.setText(str(port))
+        self.port_label.setText(str(port))
 
-    def save_port(self):
-        """保存本地端口到 frpc.toml, 仅提示, 不自动重连"""
-        text = self.port_edit.text().strip()
-        if not text.isdigit():
-            QMessageBox.warning(self, "提示", "本地端口只能输入数字")
-            return
-        port = int(text)
-        if not (1 <= port <= 65535):
-            QMessageBox.warning(self, "提示", "端口范围 1-65535")
-            return
-        self.cfg.set_local_port(port)
-        QMessageBox.information(self, "提示", "保存成功！请重新连接")
+    def open_port_dialog(self):
+        """点"编辑"打开的本地端口子页面; 保存逻辑与原来的 save_port 完全一致"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("编辑本地端口")
+        dlg.setFixedSize(320, 170)
+
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("本地端口:"))
+
+        edit = QLineEdit(self.port_label.text())
+        edit.setFixedHeight(34)
+        edit.setValidator(QIntValidator(1, 65535, dlg))
+        edit.setStyleSheet(
+            "QLineEdit{background:#ffffff;border:1px solid #cfd8e3;"
+            "border-radius:6px;padding:0 12px;font-size:14px;color:#25303f;}"
+            "QLineEdit:focus{border:1px solid #9fc0e8;}")
+        lay.addWidget(edit)
+
+        lay.addSpacing(6)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok_btn = QPushButton("保存")
+        ok_btn.setFixedSize(80, 32)
+        ok_btn.setStyleSheet(BTN_QSS)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setFixedSize(80, 32)
+        cancel_btn.setStyleSheet(BTN_QSS)
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        lay.addLayout(btn_row)
+
+        def on_ok():
+            text = edit.text().strip()
+            if not text.isdigit():
+                QMessageBox.warning(dlg, "提示", "本地端口只能输入数字")
+                return
+            port = int(text)
+            if not (1 <= port <= 65535):
+                QMessageBox.warning(dlg, "提示", "端口范围 1-65535")
+                return
+            self.cfg.set_local_port(port)          # 落盘(原 save_port 逻辑)
+            self.port_label.setText(str(port))     # 主页展示同步刷新
+            dlg.accept()
+            QMessageBox.information(self, "提示", "保存成功！请重新连接")
+
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn.clicked.connect(dlg.reject)     # 取消 = 直接返回, 不写盘
+
+        dlg.exec()
+
 
     # ---------------- Django 会话(开启/暂停时长) ----------------
 
@@ -629,17 +768,17 @@ class MainWindow(QMainWindow):
         # 时长按钮
         if self.session.status == "active":
             self.session_btn.setText("暂停时长")
-            self.session_btn.setStyleSheet(
-                "background:#ffd9d9;font-weight:bold;")   # 淡红=已连接时长
+            self.session_btn.setStyleSheet(BTN_ACTIVE_QSS)   # 淡红=已连接时长
             self.session_btn.setEnabled(True)
         elif self.session.status in ("connecting", "stopping"):
             self.session_btn.setText("处理中...")
-            self.session_btn.setStyleSheet("")
+            self.session_btn.setStyleSheet(BTN_QSS)
             self.session_btn.setEnabled(False)
         else:
             self.session_btn.setText("开启时长")
-            self.session_btn.setStyleSheet("")
+            self.session_btn.setStyleSheet(BTN_QSS)
             self.session_btn.setEnabled(True)
+
 
         # FRP 连接按钮(动画期间不干预文本, 只控制可用性)
         if self.frp_btn._loading:

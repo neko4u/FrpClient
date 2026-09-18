@@ -1,4 +1,5 @@
 from PyQt6.QtWidgets import *
+from PyQt6.QtCore import Qt
 import os
 from services.api_client import ApiClient
 from core.token_holder import TokenHolder
@@ -7,6 +8,34 @@ from core.token_storage import TokenStorage
 from core.config_manager import ConfigManager
 from core.paths import resource_dir
 from core.jwt_utils import get_uid_from_token
+from ui.frosted import apply_frosted
+
+INPUT_QSS = """
+QLineEdit{
+    background:#ffffff;
+    border:1px solid #e1e5ec;
+    border-radius:10px;
+    padding:0 16px;
+    font-size:14px;
+    color:#2b3445;
+}
+QLineEdit:focus{border:1px solid #12b7f5;}
+QLineEdit:disabled{background:#f2f4f7;color:#aab2bf;}
+"""
+
+BUTTON_QSS = """
+QPushButton{
+    background:#12b7f5;
+    color:#ffffff;
+    border:none;
+    border-radius:10px;
+    font-size:16px;
+    font-weight:bold;
+}
+QPushButton:hover{background:#3cc4f8;}
+QPushButton:pressed{background:#0ea5df;}
+QPushButton:disabled{background:#9fd9f2;color:#ffffff;}
+"""
 
 
 class LoginWindow(QWidget):
@@ -16,19 +45,53 @@ class LoginWindow(QWidget):
 
         self.setWindowTitle("登录")
 
-        layout = QVBoxLayout(self)
+        # 磨砂玻璃: 客户区透出系统材质, 系统标题栏与按钮保留
+        apply_frosted(self)
 
+        self.setFixedSize(420, 560)          # QQ 登录窗尺寸量级
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(46, 30, 46, 40)
+        layout.setSpacing(0)
+
+        # ===== 顶部标题区 =====
+        self.logo = QLabel("sorielconnection")
+        self.logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.logo.setStyleSheet(
+            "font-size:24px;font-weight:bold;color:#1a2b4b;background:transparent;")
+        layout.addWidget(self.logo)
+
+
+        layout.addSpacing(36)
+
+        # ===== 用户名 =====
         self.user = QLineEdit()
         self.user.setPlaceholderText("用户名")
-
-        self.pwd = QLineEdit()
-        self.pwd.setEchoMode(QLineEdit.EchoMode.Password)
-
-        self.btn = QPushButton("登录")
-
+        self.user.setFixedHeight(46)
+        self.user.setStyleSheet(INPUT_QSS)
         layout.addWidget(self.user)
+
+        layout.addSpacing(16)
+
+        # ===== 密码 =====
+        self.pwd = QLineEdit()
+        self.pwd.setPlaceholderText("密码")
+        self.pwd.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pwd.setFixedHeight(46)
+        self.pwd.setStyleSheet(INPUT_QSS)
         layout.addWidget(self.pwd)
+
+        layout.addSpacing(28)
+
+        # ===== 登录按钮 =====
+        self.btn = QPushButton("登录")
+        self.btn.setFixedHeight(46)
+        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn.setStyleSheet(BUTTON_QSS)
         layout.addWidget(self.btn)
+
+        layout.addStretch()
+
 
         self.btn.clicked.connect(self.login)
 
@@ -63,7 +126,6 @@ class LoginWindow(QWidget):
             TokenHolder.set_token(data["token"], data["expires_in"])
             TokenHolder.set_uid(get_uid_from_token(token))
             TokenStorage.save(token, expires_in_days=7)
-
 
             # 登录成功后立即从 API 拉取 frp token 写入 frpc.toml,保证开箱即用
             try:

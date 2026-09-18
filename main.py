@@ -1,6 +1,9 @@
 import sys
 import os
+import ctypes
+
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
 
 from ui.login_window import LoginWindow
 from ui.main_window import MainWindow
@@ -14,7 +17,14 @@ from core.paths import ensure_resources, resource_dir
 
 if __name__ == "__main__":
     ensure_resources()
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "sorielflow.frpclient.1")
+    except Exception:
+        pass
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(os.path.join(resource_dir(), "icon.ico")))
+
     token = TokenStorage.load()
 
     if token:
