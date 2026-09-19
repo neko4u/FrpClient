@@ -507,17 +507,26 @@ class MainWindow(QMainWindow):
         self._update_port_caption()
 
     def _update_port_caption(self):
-        """主页"本地端口"那行: 文件夹模式下改为提示(端口号在该模式下不生效)"""
+        """主页"本地端口"那行: 文件夹模式下改为提示(端口号在该模式下不生效)
+
+        关键: 标题按"两种文案里较宽的那个"固定宽度, 数值区宽度也不变(只清空文本),
+        这样右侧"编辑"按钮的位置在任何模式下都完全一致。
+        """
+        fm = self.port_caption.fontMetrics()
+        self.port_caption.setFixedWidth(
+            max(fm.horizontalAdvance("本地端口:"),
+                fm.horizontalAdvance("快速建站模式已开启")) + 6)
+
         if self.cfg.is_static_site():
             self.port_caption.setText("快速建站模式已开启")
             self.port_caption.setToolTip(
                 "当前共享的是文件夹，本地端口配置不生效（切回后自动恢复）")
-            self.port_label.setVisible(False)
+            self.port_label.setText("")          # 只清文本, 保留占位宽度
         else:
             self.port_caption.setText("本地端口:")
             self.port_caption.setToolTip("")
             self.port_label.setText(str(self.cfg.get_local_port()))
-            self.port_label.setVisible(True)
+
 
 
     def open_port_dialog(self):
@@ -544,7 +553,8 @@ class MainWindow(QMainWindow):
 
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel("本地端口:"))
-        edit = QLineEdit(self.port_label.text())
+        edit = QLineEdit(str(self.cfg.get_local_port()))
+
         edit.setFixedWidth(110)
         edit.setFixedHeight(34)
         edit.setValidator(QIntValidator(1, 65535, dlg))
