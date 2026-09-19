@@ -33,7 +33,9 @@ if __name__ == "__main__":
         config_mgr = ConfigManager(os.path.join(resource_dir(), "frpc.toml"))
 
         config_mgr.update_token_from_api(token)
+        config_mgr.set_proxy_name(get_uid_from_token(token))   # 隧道名 = 用户 uid
         window = MainWindow()
+
     else:
         window = LoginWindow()
 

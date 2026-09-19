@@ -131,8 +131,10 @@ class LoginWindow(QWidget):
             try:
                 cfg = ConfigManager(os.path.join(resource_dir(), "frpc.toml"))
                 cfg.update_token_from_api(token)
+                cfg.set_proxy_name(TokenHolder.get_uid())   # 隧道名 = 用户 uid
             except Exception as e:
                 print("更新 frp token 失败:", e)
+
 
             self.main = MainWindow()
             self.main.show()

@@ -16,7 +16,8 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QLineEdit, QTextEdit,
                              QToolButton, QMenu, QMessageBox,
-                             QApplication, QDialog, QGraphicsDropShadowEffect)
+                             QApplication, QDialog, QGraphicsDropShadowEffect,
+                             QFrame, QFileDialog)
 from PyQt6.QtGui import QIntValidator, QPainter, QColor
 from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
 import os
@@ -28,6 +29,8 @@ from core.token_holder import TokenHolder
 from core.token_storage import TokenStorage
 from core.session_manager import SessionManager
 from ui.frosted import apply_frosted
+from ui.widgets.controls import ToggleSwitch, InfoDot
+
 
 # 磨砂窗口里的弹出菜单必须有不透明背景, 否则会渲染成黑背景
 MENU_QSS = """
@@ -246,6 +249,13 @@ class MainWindow(QMainWindow):
         self._pause_watchdog.setSingleShot(True)
         self._pause_watchdog.setInterval(6000)     # 兜底: 6s 内没等到 frp 终态也继续
         self._pause_watchdog.timeout.connect(self._finish_pending_pause)
+
+        # "共享文件夹"模式切换: 保存后若 frpc 在跑 -> 有序重启让新配置生效
+        self._pending_restart = False
+        self._restart_watchdog = QTimer(self)
+        self._restart_watchdog.setSingleShot(True)
+        self._restart_watchdog.setInterval(6000)     # 兜底: 等不到 frp 终态也要继续
+        self._restart_watchdog.timeout.connect(self._finish_pending_restart)
 
 
 
@@ -490,28 +500,97 @@ class MainWindow(QMainWindow):
         self.port_label.setText(str(port))
 
     def open_port_dialog(self):
-        """点"编辑"打开的本地端口子页面; 保存逻辑与原来的 save_port 完全一致"""
+        """点"编辑"打开的本地端口 / 共享文件夹 子页面"""
+        self._build_port_dialog().exec()
+
+    def _build_port_dialog(self):
+        """构建"编辑本地端口"子页面(单独拆出来便于自动化测试, 不 exec)"""
         dlg = QDialog(self)
         dlg.setWindowTitle("编辑本地端口")
-        dlg.setFixedSize(320, 170)
+        dlg.setFixedSize(400, 340)
 
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(10)
+        lay.setSpacing(0)
 
-        lay.addWidget(QLabel("本地端口:"))
+        title_qss = "font-size:13px;font-weight:bold;color:#25303f;"
 
+        # ================= ① 端口设置 =================
+        t1 = QLabel("端口设置")
+        t1.setStyleSheet(title_qss)
+        lay.addWidget(t1)
+        lay.addSpacing(10)
+
+        port_row = QHBoxLayout()
+        port_row.addWidget(QLabel("本地端口:"))
         edit = QLineEdit(self.port_label.text())
+        edit.setFixedWidth(110)
         edit.setFixedHeight(34)
         edit.setValidator(QIntValidator(1, 65535, dlg))
         edit.setStyleSheet(
             "QLineEdit{background:#ffffff;border:1px solid #cfd8e3;"
             "border-radius:6px;padding:0 12px;font-size:14px;color:#25303f;}"
-            "QLineEdit:focus{border:1px solid #9fc0e8;}")
-        lay.addWidget(edit)
+            "QLineEdit:focus{border:1px solid #9fc0e8;}"
+            "QLineEdit:disabled{background:#f2f4f7;color:#aab2bf;}")
+        port_row.addWidget(edit)
+        port_row.addSpacing(6)
+        # 端口后面的小叹号: hover 出提示, 点击弹同一段说明
+        port_row.addWidget(InfoDot("开启文件夹模式后，端口号配置不生效（切回后自动恢复）。"))
+        port_row.addStretch()
+        lay.addLayout(port_row)
 
-        lay.addSpacing(6)
+        # ================= 分割线: 端口设置 / 文件夹模式 =================
+        lay.addSpacing(16)
+        line = QFrame(dlg)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background:#e6ebf2;border:none;")
+        lay.addWidget(line)
+        lay.addSpacing(16)
 
+        # ================= ② 文件夹模式(快速建站) =================
+        t2 = QLabel("文件夹模式（快速建站）")
+        t2.setStyleSheet(title_qss)
+        lay.addWidget(t2)
+        lay.addSpacing(10)
+
+        folder = self.cfg.get_static_folder() or self.cfg.get_pref(
+            self.cfg.PREF_STATIC_FOLDER, "")
+        state = {"folder": folder}
+
+        sw_row = QHBoxLayout()
+        sw_row.addWidget(QLabel("共享本地文件夹:"))
+        sw_row.addStretch()
+        switch = ToggleSwitch(dlg)
+        switch.setChecked(self.cfg.is_static_site(), animate=False)   # 持久化: 打开时按文件恢复
+        sw_row.addWidget(switch)
+        lay.addLayout(sw_row)
+
+        lay.addSpacing(10)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("文件夹:"))
+        path_label = QLabel(folder or "（未选择）")
+        path_label.setFixedWidth(186)
+        path_label.setStyleSheet("font-size:12px;color:#5f5e5a;")
+        path_label.setToolTip(folder)
+        folder_row.addWidget(path_label)
+        choose_btn = QPushButton("选择文件夹")
+        choose_btn.setFixedHeight(30)
+        choose_btn.setStyleSheet(BTN_QSS)
+        folder_row.addWidget(choose_btn)
+        folder_row.addStretch()
+        lay.addLayout(folder_row)
+
+        lay.addSpacing(8)
+        hint = QLabel("开启后，外网访问到的就是这个文件夹里的文件；\n"
+                      "建议文件夹里放一个 index.html（否则会列出文件名清单）。")
+        hint.setStyleSheet("font-size:11px;color:#888780;")
+        lay.addWidget(hint)
+
+        lay.addStretch()
+
+        # ================= 底部按钮 =================
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         ok_btn = QPushButton("保存")
@@ -524,6 +603,36 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(cancel_btn)
         lay.addLayout(btn_row)
 
+        # ---------------- 交互 ----------------
+
+        def refresh_enabled():
+            """文件夹模式开启时本地端口不生效 -> 输入框置灰"""
+            on = switch.isChecked()
+            edit.setEnabled(not on)
+            choose_btn.setEnabled(True)
+            if on and not state["folder"]:
+                path_label.setText("（未选择）")
+
+        def on_choose():
+            start = state["folder"] or os.path.expanduser("~")
+            picked = QFileDialog.getExistingDirectory(dlg, "选择要共享的文件夹", start)
+            if not picked:
+                return
+            picked = os.path.abspath(picked).replace("/", "\\")
+            if not self._folder_is_safe(dlg, picked):
+                return
+            state["folder"] = picked
+            path_label.setText(picked)
+            path_label.setToolTip(picked)
+
+        def on_toggled(on):
+            if on and not state["folder"]:
+                QMessageBox.information(
+                    dlg, "提示", "请先点「选择文件夹」选好要共享的目录，再开启开关。")
+                switch.setChecked(False, animate=True)      # 弹回, 不写盘
+                return
+            refresh_enabled()
+
         def on_ok():
             text = edit.text().strip()
             if not text.isdigit():
@@ -533,15 +642,63 @@ class MainWindow(QMainWindow):
             if not (1 <= port <= 65535):
                 QMessageBox.warning(dlg, "提示", "端口范围 1-65535")
                 return
-            self.cfg.set_local_port(port)          # 落盘(原 save_port 逻辑)
-            self.port_label.setText(str(port))     # 主页展示同步刷新
-            dlg.accept()
-            QMessageBox.information(self, "提示", "保存成功！请重新连接")
+            static_on = switch.isChecked()
+            if static_on and not state["folder"]:
+                QMessageBox.warning(dlg, "提示", "已开启文件夹模式，请先选择要共享的文件夹")
+                return
+            if static_on and not os.path.isdir(state["folder"]):
+                QMessageBox.warning(
+                    dlg, "提示", "文件夹不存在或已被移动：\n%s" % state["folder"])
+                return
 
+            old_static = self.cfg.is_static_site()
+            old_port = self.cfg.get_local_port()
+            changed = (port != old_port) or (static_on != old_static)
+
+            self.cfg.set_local_port(port)                          # 原 save_port 逻辑
+            self.cfg.set_static_site(state["folder"], static_on)   # 挂/摘 static_file 插件
+            self.cfg.set_pref(self.cfg.PREF_STATIC_FOLDER, state["folder"])
+            self.port_label.setText(str(port))                      # 主页展示同步刷新
+            dlg.accept()
+
+            if not changed:
+                return
+            if self.current_status in ("connecting", "connected"):
+                QMessageBox.information(
+                    self, "提示",
+                    "保存成功，正在按新配置重新连接（隧道会短暂中断 1~3 秒）。")
+                self._restart_frp_async()      # frpc 在跑 -> 有序重启让新配置生效
+            else:
+                QMessageBox.information(self, "提示", "保存成功！请重新连接")
+
+        switch.toggled.connect(on_toggled)
+        choose_btn.clicked.connect(on_choose)
         ok_btn.clicked.connect(on_ok)
         cancel_btn.clicked.connect(dlg.reject)     # 取消 = 直接返回, 不写盘
+        refresh_enabled()
+        return dlg
 
-        dlg.exec()
+    def _folder_is_safe(self, dlg, folder):
+        """目录安全校验: 盘符根目录直接拒绝; C 盘二次确认"""
+        drive, tail = os.path.splitdrive(folder)
+        if tail.strip("\\/") == "":
+            QMessageBox.warning(
+                dlg, "无法共享",
+                "不能共享整个磁盘根目录：\n%s\n\n请选择磁盘里的具体文件夹。" % folder)
+            return False
+        if drive.upper().startswith("C"):
+            ret = QMessageBox.warning(
+                dlg, "安全提醒",
+                "你选择的文件夹位于 C 盘（通常是系统盘）：\n%s\n\n"
+                "开启后，这个文件夹里的所有文件都会被发布到外网，\n"
+                "任何知道地址的人都能访问，并可能看到文件名清单。\n\n"
+                "建议改用 D 盘等非系统盘，或放到一个专门的空目录里。\n\n"
+                "确定要继续使用这个目录吗？" % folder,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            return ret == QMessageBox.StandardButton.Yes
+        return True
+
 
 
     # ---------------- Django 会话(开启/暂停时长) ----------------
@@ -574,6 +731,25 @@ class MainWindow(QMainWindow):
         self._pending_pause = False
         self._pause_watchdog.stop()
         self.session.stop()
+
+    
+    # ---------------- 配置变更后的有序重启(文件夹模式开关 / 本地端口) ----------------
+
+    def _restart_frp_async(self):
+        """frpc 正在跑时配置变了 -> 先停(等终态)再用新配置起来。
+        复用原 remotePort, 对外地址不变; 不碰 Django 会话(时长继续走)。"""
+        self._pending_restart = True
+        self._restart_watchdog.start()
+        self.frp.stop()                     # 等 on_frp_status 终态 -> _finish_pending_restart
+
+    def _finish_pending_restart(self):
+        """frpc 已停止(或等待超时) -> 用新配置重新启动"""
+        if not self._pending_restart:
+            return
+        self._pending_restart = False
+        self._restart_watchdog.stop()
+        self.frp.start()
+
 
 
     # ---------------- FRP(连接/断开) ----------------
@@ -622,7 +798,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("写入 remotePort 失败:", e)
         self._update_addr_label()
+        try:
+            uid = TokenHolder.get_uid()
+            if uid and self.cfg.get_proxy_name() != uid:
+                self.cfg.set_proxy_name(uid)
+        except Exception as e:
+            print("写入隧道名失败:", e)
         res = self.frp.start()
+
         if res not in ("启动成功", "已运行"):
             self.frp_btn.stop_loading("连接")
             QMessageBox.warning(self, "提示", f"frpc 启动失败：{res}")
@@ -805,7 +988,12 @@ class MainWindow(QMainWindow):
         if status in ("stopped", "failed") and self._pending_pause:
             self._finish_pending_pause()
 
+        # 配置变更后的重启: frpc 已到终态 -> 用新配置重新起来
+        if status in ("stopped", "failed") and self._pending_restart:
+            self._finish_pending_restart()
+
         self._apply_ui_state()
+
 
 
     # ---------------- UI 状态统一刷新 ----------------
@@ -833,8 +1021,12 @@ class MainWindow(QMainWindow):
 
 
         # FRP 连接按钮(动画期间不干预文本, 只控制可用性)
-        if self.frp_btn._loading:
+        if self._pending_restart:
+            self.frp_btn.setText("重连中...")
             self.frp_btn.setEnabled(False)
+        elif self.frp_btn._loading:
+            self.frp_btn.setEnabled(False)
+
         elif self.current_status in ("connecting", "connected"):
             self.frp_btn.setText("断开")
             self.frp_btn.setEnabled(True)
