@@ -41,7 +41,11 @@ QMenu::item:disabled{color:#9aa5b5;}
 QMenu::separator{height:1px;background:#eceff3;margin:4px 12px;}
 """
 
+# fork: 隧道对外域名(界面展示/复制用; 服务器返回 host 时以服务器为准)
+DEFAULT_FRP_HOST = "connections.sorielflow.com"
+
 # ================= 可点击按钮的立体样式 =================
+
 # 正常可点击: 白底渐变 + 描边 + 投影, 提示"可以点"
 BTN_QSS = """
 QPushButton{
@@ -792,7 +796,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "未获取到可用端口，请稍后重试")
             return
         self.remote_port = port
-        self.frp_host = data.get("host") or "ai.sorielflow.com"
+        self.frp_host = data.get("host") or DEFAULT_FRP_HOST
+
         try:
             self.cfg.set_remote_port(port)      # 覆盖 frpc.toml 的 remotePort
         except Exception as e:
@@ -845,7 +850,8 @@ class MainWindow(QMainWindow):
 
     def _update_addr_label(self):
         if self.remote_port:
-            host = self.frp_host or "ai.sorielflow.com"
+            host = self.frp_host or DEFAULT_FRP_HOST
+
             self.addr_label.setText(f"{host}:{self.remote_port}")
             self.copy_btn.setEnabled(True)
         else:
