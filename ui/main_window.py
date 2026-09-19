@@ -363,7 +363,9 @@ class MainWindow(QMainWindow):
 
         # ================= 本地端口(主页仅展示, 点"编辑"弹子页面修改) =================
         port_row = QHBoxLayout()
-        port_row.addWidget(QLabel("本地端口:"))
+        self.port_caption = QLabel("本地端口:")
+        port_row.addWidget(self.port_caption)
+
 
         self.port_label = QLabel("7777")
         self.port_label.setFixedWidth(120)
@@ -502,6 +504,21 @@ class MainWindow(QMainWindow):
     def load(self):
         port = self.cfg.get_local_port()
         self.port_label.setText(str(port))
+        self._update_port_caption()
+
+    def _update_port_caption(self):
+        """主页"本地端口"那行: 文件夹模式下改为提示(端口号在该模式下不生效)"""
+        if self.cfg.is_static_site():
+            self.port_caption.setText("快速建站模式已开启")
+            self.port_caption.setToolTip(
+                "当前共享的是文件夹，本地端口配置不生效（切回后自动恢复）")
+            self.port_label.setVisible(False)
+        else:
+            self.port_caption.setText("本地端口:")
+            self.port_caption.setToolTip("")
+            self.port_label.setText(str(self.cfg.get_local_port()))
+            self.port_label.setVisible(True)
+
 
     def open_port_dialog(self):
         """点"编辑"打开的本地端口 / 共享文件夹 子页面"""
@@ -664,7 +681,9 @@ class MainWindow(QMainWindow):
             self.cfg.set_pref(self.cfg.PREF_STATIC_FOLDER, state["folder"])
             self.port_label.setText(str(port))                      # 主页展示同步刷新
             self._update_addr_label()                               # 切换模式后刷新外网地址
+            self._update_port_caption()                             # 主页"本地端口"那行同步
             dlg.accept()
+
 
 
             if not changed:
