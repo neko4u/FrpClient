@@ -663,7 +663,9 @@ class MainWindow(QMainWindow):
             self.cfg.set_static_site(state["folder"], static_on)   # 挂/摘 static_file 插件
             self.cfg.set_pref(self.cfg.PREF_STATIC_FOLDER, state["folder"])
             self.port_label.setText(str(port))                      # 主页展示同步刷新
+            self._update_addr_label()                               # 切换模式后刷新外网地址
             dlg.accept()
+
 
             if not changed:
                 return
@@ -852,11 +854,17 @@ class MainWindow(QMainWindow):
         if self.remote_port:
             host = self.frp_host or DEFAULT_FRP_HOST
 
-            self.addr_label.setText(f"{host}:{self.remote_port}")
+            if self.cfg.is_static_site():
+                # 文件夹模式: 强制 http(插件是纯 HTTP 服务, 同时避免浏览器按 https 升级)
+                self.addr_label.setText(f"http://{host}:{self.remote_port}/")
+            else:
+                # 原有业务: 保持原样(隧道里可能是任意 TCP 协议, 不能假定是 http)
+                self.addr_label.setText(f"{host}:{self.remote_port}")
             self.copy_btn.setEnabled(True)
         else:
             self.addr_label.setText("--")
             self.copy_btn.setEnabled(False)
+
 
     def copy_addr(self):
         """复制完整的外网地址(域名:端口)"""
