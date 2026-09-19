@@ -231,7 +231,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("sorielconnection")
         apply_frosted(self)
 
-        self.setGeometry(100, 100, 760, 480)
+        # 固定窗口尺寸(客户区 495x289 —— 截图整窗 495x320 减去系统标题栏 31px),
+        # setFixedSize 会同时锁定 min/max, 用户无法拉伸; 需要微调只改这行数字。
+        self.setFixedSize(495, 289)
+        self.move(100, 100)
+
 
 
         # ===== 核心管理器 =====
