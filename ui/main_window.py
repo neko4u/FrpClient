@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QToolButton, QMenu, QMessageBox,
                              QApplication, QDialog, QGraphicsDropShadowEffect)
 from PyQt6.QtGui import QIntValidator, QPainter, QColor
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
 import os
 
 from core.frp_manager import FRPManager
@@ -112,6 +112,8 @@ class FillButton(QPushButton):
     FILL_STEPS = 30            # 一次填充从 0->100% 的帧数
     FRAME_MS = 20              # 每帧间隔(20ms), 总时长 = 30*20 = 600ms
 
+    fill_finished = pyqtSignal()   # 动画完整播放结束 -> 让主窗口重刷按钮状态
+
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self._loading = False
@@ -161,6 +163,8 @@ class FillButton(QPushButton):
         self.setEnabled(True)
         self.setText(text)
         self.update()
+        self.fill_finished.emit()
+
 
     def paintEvent(self, event):
         if not self._loading:
@@ -235,6 +239,14 @@ class MainWindow(QMainWindow):
         self.remote_port = 0            # 服务器分配的远程端口
         self.frp_host = ""              # 对外访问域名
         self._going_login = False       # 防止 401 重复触发跳转
+
+        # "暂停时长"的顺序控制: 先把 frpc 真正停掉, 再关 Django 会话
+        self._pending_pause = False
+        self._pause_watchdog = QTimer(self)
+        self._pause_watchdog.setSingleShot(True)
+        self._pause_watchdog.setInterval(6000)     # 兜底: 6s 内没等到 frp 终态也继续
+        self._pause_watchdog.timeout.connect(self._finish_pending_pause)
+
 
 
 
@@ -358,7 +370,9 @@ class MainWindow(QMainWindow):
         # ================= 信号绑定 =================
         self.session_btn.clicked.connect(self.toggle_session)
         self.frp_btn.clicked.connect(self.toggle_frp)
+        self.frp_btn.fill_finished.connect(self._apply_ui_state)   # 动画播完重刷按钮
         self.edit_port_btn.clicked.connect(self.open_port_dialog)
+
 
 
         self.session.status_changed.connect(self.on_session_status)
@@ -545,8 +559,20 @@ class MainWindow(QMainWindow):
     def _pause_session(self):
         self._show_loading()
         if self.current_status in ("connecting", "connected"):
-            self._release_port_async()   # 先释放端口, 再停 frpc
-            self.frp.stop()
+            self._pending_pause = True
+            self._release_port_async()          # 先释放远程端口
+            self.frp.stop()                     # 停 frpc -> 等 on_frp_status 的终态
+            self._pause_watchdog.start()        # 兜底: 等不到终态也要继续
+            self._apply_ui_state()              # 立即反馈"处理中..."
+            return
+        self.session.stop()
+
+    def _finish_pending_pause(self):
+        """frpc 已停止(或等待超时) -> 现在才真正关闭 Django 会话"""
+        if not self._pending_pause:
+            return
+        self._pending_pause = False
+        self._pause_watchdog.stop()
         self.session.stop()
 
 
@@ -596,7 +622,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("写入 remotePort 失败:", e)
         self._update_addr_label()
-        self.frp.start()
+        res = self.frp.start()
+        if res not in ("启动成功", "已运行"):
+            self.frp_btn.stop_loading("连接")
+            QMessageBox.warning(self, "提示", f"frpc 启动失败：{res}")
+            self._release_port_async()
+            self._apply_ui_state()
+
 
     def _release_port_async(self):
         """断开时释放端口（异步, 不阻塞 UI）"""
@@ -667,7 +699,10 @@ class MainWindow(QMainWindow):
     # ---------------- 登出 ----------------
 
     def logout(self):
+        self._pending_pause = False
+        self._pause_watchdog.stop()
         if self.current_status in ("connecting", "connected"):
+
             self._release_port_async()
             self.frp.stop()
         if self.session.status == "active":
@@ -703,7 +738,10 @@ class MainWindow(QMainWindow):
         if self._going_login:
             return
         self._going_login = True
+        self._pending_pause = False
+        self._pause_watchdog.stop()
         try:
+
             if self.current_status in ("connecting", "connected"):
                 self.frp.stop()
         except Exception:
@@ -726,7 +764,10 @@ class MainWindow(QMainWindow):
 
 
     def on_session_closed(self, info):
+        self._pending_pause = False
+        self._pause_watchdog.stop()
         if self.current_status in ("connecting", "connected"):
+
             self.frp.stop()
         self._release_port_async()       # 会话结束 -> 释放端口
         balance = info.get("balance")
@@ -760,13 +801,24 @@ class MainWindow(QMainWindow):
             # 停止(主动断开/进程退出) -> 结束动画, 恢复"连接"
             self.frp_btn.stop_loading("连接")
 
+        # frpc 已到终态 -> 若正在"暂停时长", 这时才真正去关 Django 会话
+        if status in ("stopped", "failed") and self._pending_pause:
+            self._finish_pending_pause()
+
         self._apply_ui_state()
+
 
     # ---------------- UI 状态统一刷新 ----------------
 
     def _apply_ui_state(self):
         # 时长按钮
-        if self.session.status == "active":
+        if self._pending_pause:
+            # 正在等 frpc 真正停止(之后才关会话) -> 立即给出反馈
+            self.session_btn.setText("处理中...")
+            self.session_btn.setStyleSheet(BTN_QSS)
+            self.session_btn.setEnabled(False)
+        elif self.session.status == "active":
+
             self.session_btn.setText("暂停时长")
             self.session_btn.setStyleSheet(BTN_ACTIVE_QSS)   # 淡红=已连接时长
             self.session_btn.setEnabled(True)

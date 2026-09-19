@@ -13,6 +13,8 @@ from core.token_holder import TokenHolder
 
 HEARTBEAT_INTERVAL_MS = 30 * 1000   # 30s 心跳
 COUNTDOWN_INTERVAL_MS = 200         # 倒计时轮询 200ms(精确), 秒变才发信号 -> 平滑
+OP_TIMEOUT_MS = 12 * 1000           # start/stop 请求看门狗: 超时则本地复位,
+                                    # 避免网络/服务端无响应时按钮永久卡在"处理中..."
 
 
 class SessionManager(QObject):
@@ -41,6 +43,13 @@ class SessionManager(QObject):
         self._cd_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 精确计时, 避免丢 tick
         self._cd_timer.timeout.connect(self._tick_countdown)
         self._last_cd_sec = None  # 上次发出的剩余秒, 秒变才 emit
+
+        # start/stop 看门狗(一次性): 超时 -> 本地复位
+        self._op_timer = QTimer(self)
+        self._op_timer.setSingleShot(True)
+        self._op_timer.setInterval(OP_TIMEOUT_MS)
+        self._op_timer.timeout.connect(self._on_op_timeout)
+
 
     # ---------- 对外接口 ----------
 
@@ -75,7 +84,9 @@ class SessionManager(QObject):
             self.error.emit("未登录，请先登录")
             return
         self._set_status("connecting")
+        self._op_timer.start()          # 看门狗: 超时本地复位
         self.api.start(token, self._on_start)
+
 
     def stop(self):
         """主动断开: 先停心跳/倒计时, 再调服务器 stop"""
@@ -89,7 +100,9 @@ class SessionManager(QObject):
         self.session_id = ""
         self.stop_time_ts = 0
         self._set_status("stopping")
+        self._op_timer.start()          # 看门狗: 超时本地复位
         self.api.stop(token, sid, self._on_stop)
+
 
     def refresh_status(self, token=None):
         """启动时同步: 查服务器当前会话(可能上次没正常关)"""
@@ -101,7 +114,9 @@ class SessionManager(QObject):
     # ---------- 内部回调 ----------
 
     def _on_start(self, data):
+        self._op_timer.stop()
         if data.get("code") != 0:
+
             self._set_status("error")
             self.error.emit(data.get("msg") or data.get("message") or "开启会话失败")
             return
@@ -117,7 +132,9 @@ class SessionManager(QObject):
         self._tick_countdown()
 
     def _on_status(self, data):
+        self._op_timer.stop()
         if data.get("code") != 0:
+
             # 401 等 -> token 失效
             self.error.emit(data.get("msg") or data.get("message") or "状态查询失败")
             self.initialized.emit()   # 查询结束(失败也要撤遮罩)
@@ -153,7 +170,9 @@ class SessionManager(QObject):
         self._tick_countdown()
 
     def _on_stop(self, data):
+        self._op_timer.stop()
         if data.get("code") != 0:
+
             self.error.emit(data.get("msg") or "停止会话失败")
         self._calibrate_clock(data)
         if "balance_seconds" in data:
@@ -162,7 +181,18 @@ class SessionManager(QObject):
         self._teardown()
         self._set_status("idle")
 
+    def _on_op_timeout(self):
+        if self._status == "connecting":
+            self._teardown()
+            self._set_status("error")
+            self.error.emit("开启时长超时：服务器无响应，请稍后重试")
+        elif self._status == "stopping":
+            self._teardown()
+            self._set_status("idle")
+            self.error.emit("断开时长超时：已恢复为未开启，服务端会话将由巡检结算")
+
     # ---------- 内部逻辑 ----------
+
 
     def _do_heartbeat(self):
         token = TokenHolder.get_token()
