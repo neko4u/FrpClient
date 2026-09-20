@@ -105,4 +105,9 @@ class SessionAPI:
         """查询当前端口（启动/恢复时用）"""
         self._get("/api/frp_port/", token, callback)
 
+    def user_profile(self, token, callback):
+        """获取当前用户资料(含头像相对路径)"""
+        self._get("/api/user_profile/", token, callback)
+
+
 

@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QToolButton, QMenu, QMessageBox,
                              QApplication, QDialog, QGraphicsDropShadowEffect,
                              QFrame, QFileDialog)
-from PyQt6.QtGui import QIntValidator, QPainter, QColor
-from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
+from PyQt6.QtGui import QIntValidator, QPainter, QColor, QIcon
+from PyQt6.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal
 import os
 
 from core.frp_manager import FRPManager
@@ -30,6 +30,8 @@ from core.token_storage import TokenStorage
 from core.session_manager import SessionManager
 from ui.frosted import apply_frosted
 from ui.widgets.controls import ToggleSwitch, InfoDot
+from core.avatar import AvatarLoader
+
 
 
 # 磨砂窗口里的弹出菜单必须有不透明背景, 否则会渲染成黑背景
@@ -407,6 +409,13 @@ class MainWindow(QMainWindow):
         self.load()
         self._apply_ui_state()
 
+        # 头像
+        self.avatar_loader = AvatarLoader(self)
+        self.avatar_loader.loaded.connect(self._on_avatar_loaded)
+        self.avatar_loader.failed.connect(self._on_avatar_failed)
+        self._load_avatar()
+
+
         # 启动遮罩: 等 status 数据回来再撤掉, 避免看到未加载完的页面
         self._init_loading_mask()
         self.session.initialized.connect(self._remove_loading_mask)
@@ -502,6 +511,49 @@ class MainWindow(QMainWindow):
         pos = self.avatar_btn.mapToGlobal(
             self.avatar_btn.rect().bottomLeft() + QPoint(0, 4))
         self.avatar_menu.popup(pos)
+
+    
+    # ---------------- 头像 ----------------
+
+    def _avatar_cache_key(self):
+        """按 uid 缓存头像路径, 避免换账号后串号"""
+        return "avatar_" + (TokenHolder.get_uid() or "anon")
+
+    def _load_avatar(self):
+        """先用本地缓存秒显, 再向服务器拉取最新的"""
+        cached = self.cfg.get_pref(self._avatar_cache_key(), "")
+        if cached:
+            self.avatar_loader.load(cached)
+        token = TokenHolder.get_token()
+        if token:
+            try:
+                self.session.api.user_profile(token, self._on_profile)
+            except Exception as e:
+                print("获取用户资料失败:", e)
+
+    def _on_profile(self, data):
+        if data.get("code") != 0:
+            return                  # 401 等由其他流程统一处理, 这里静默
+        path = data.get("avatar") or ""
+        if not path:
+            return
+        if path != self.cfg.get_pref(self._avatar_cache_key(), ""):
+            self.cfg.set_pref(self._avatar_cache_key(), path)
+        self.avatar_loader.load(path)
+
+    def _on_avatar_loaded(self, pixmap):
+        """加载成功 -> 显示圆形头像, 去掉"头"字占位"""
+        self.avatar_btn.setIcon(QIcon(pixmap))
+        self.avatar_btn.setIconSize(QSize(self.avatar_btn.width(),
+                                          self.avatar_btn.height()))
+        self.avatar_btn.setText("")
+        self.avatar_btn.setStyleSheet(
+            "QPushButton{border:none;background:transparent;}")
+
+    def _on_avatar_failed(self, msg):
+        """加载失败 -> 保持默认的"头"字占位(不打扰用户)"""
+        print("头像加载失败:", msg)
+
 
     # ---------------- 配置 ----------------
 
