@@ -141,7 +141,6 @@ class SessionManager(QObject):
             return
         self._calibrate_clock(data)
         self._balance = data.get("balance_seconds", 0)
-        self.countdown_changed.emit(self._balance)
         if data.get("has_session"):
             self.session_id = data["session_id"]
             self.stop_time_ts = data["stop_time_ts"]
@@ -149,10 +148,12 @@ class SessionManager(QObject):
             self._set_status("active")
             self._hb_timer.start()
             self._cd_timer.start()
-            self._tick_countdown()
+            self._tick_countdown()          # active 由倒计时负责显示
         else:
             self._set_status("idle")
+            self.countdown_changed.emit(self._balance)
         self.initialized.emit()       # 查询完成 -> 撤遮罩
+
 
     def _on_heartbeat(self, data):
         if data.get("code") != 0:
