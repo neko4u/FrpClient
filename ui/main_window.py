@@ -29,6 +29,7 @@ from core.token_holder import TokenHolder
 from core.token_storage import TokenStorage
 from core.session_manager import SessionManager
 from ui.frosted import apply_frosted
+from core.version import format_version
 from ui.widgets.controls import ToggleSwitch, InfoDot
 from core.avatar import AvatarLoader
 
@@ -484,10 +485,10 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         act_update = menu.addAction("检查更新")
         act_feedback = menu.addAction("意见反馈")
-        act_update.setEnabled(False)     # 占位(仅UI)
         act_feedback.setEnabled(False)   # 占位(仅UI)
         about_btn.setMenu(menu)
         act_log.triggered.connect(self.toggle_log_window)
+        act_update.triggered.connect(self.check_update)
         lay.addWidget(about_btn)
 
         lay.addStretch()
@@ -964,6 +965,16 @@ class MainWindow(QMainWindow):
     def append_log(self, line):
         if self.log_win is not None:
             self.log_win.append(line)
+
+    def check_update(self):
+        QMessageBox.information(
+        self,
+        "检查更新",
+        f"当前版本：{format_version()}\n\n"
+        "",
+    )
+
+
 
     def toggle_log_window(self):
         if self.log_win is None:
