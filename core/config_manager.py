@@ -201,7 +201,6 @@ class ConfigManager:
         except FileNotFoundError:
             data = {}
         except Exception as e:
-            # JSON 损坏时: 先备份原文件, 并且放弃本次写入, 避免把其它配置一次性冲掉
             try:
                 import shutil
                 shutil.copyfile(path, path + ".bad")
