@@ -198,6 +198,27 @@ class ConfigManager:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+        except FileNotFoundError:
+            data = {}
+        except Exception as e:
+            # JSON 损坏时: 先备份原文件, 并且放弃本次写入, 避免把其它配置一次性冲掉
+            try:
+                import shutil
+                shutil.copyfile(path, path + ".bad")
+            except Exception:
+                pass
+            print("config.json 解析失败, 原文件已备份为 config.json.bad, 本次不写入:", e)
+            return False
+        data[key] = value
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+
+        path = os.path.join(resource_dir(), "config.json")
+        data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
         except Exception:
             data = {}
         data[key] = value
