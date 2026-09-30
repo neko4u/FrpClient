@@ -8,7 +8,7 @@
 """
 
 # ================= 改版本号只改这一行 =================
-APP_VERSION = "1.0.0"
+APP_VERSION = "0.1.0"
 # =======================================
 
 def format_version(v=APP_VERSION):
@@ -24,6 +24,11 @@ def format_version(v=APP_VERSION):
             raise ValueError(f"版本号每段最多 2 位数字: {v!r}")
         out.append(p.zfill(2))          # 不足 2 位左补 0
     return ".".join(out)
+
+
+def display_version(v=APP_VERSION):
+    return ".".join(str(int(p)) for p in format_version(v).split("."))
+
 
 
 def version_str(v=APP_VERSION):

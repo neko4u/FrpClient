@@ -105,9 +105,22 @@ class LoginWindow(QWidget):
             self.close()
 
     def login(self):
+        # 先本地校验, 空用户名/密码直接提示, 不发请求
+        user = self.user.text().strip()
+        pwd = self.pwd.text()
+        if not user:
+            QMessageBox.warning(self, "提示", "请输入用户名")
+            self.user.setFocus()
+            return
+        if not pwd:
+            QMessageBox.warning(self, "提示", "请输入密码")
+            self.pwd.setFocus()
+            return
+
         # 请求期间禁用交互, 防止重复提交/误操作
         self._set_busy(True)
-        self.api.login(self.user.text(), self.pwd.text(), self.on_result)
+        self.api.login(user, pwd, self.on_result)
+
 
     def _set_busy(self, busy):
         """busy=True: 禁用输入与按钮并显示'登录中...'; False: 恢复"""
@@ -140,6 +153,10 @@ class LoginWindow(QWidget):
             self.main.show()
             self.close()
         else:
-            # 失败: 恢复交互并提示
+            # 失败: 恢复交互并提示(服务端统一返回 {code, msg, data})
             self._set_busy(False)
-            QMessageBox.warning(self, "失败", data.get("message"))
+            msg = data.get("msg") or data.get("message") or "登录失败，请稍后重试"
+            QMessageBox.warning(self, "登录失败", msg)
+            self.pwd.setFocus()
+            self.pwd.selectAll()
+

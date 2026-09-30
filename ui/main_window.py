@@ -18,8 +18,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QToolButton, QMenu, QMessageBox,
                              QApplication, QDialog, QGraphicsDropShadowEffect,
                              QFrame, QFileDialog)
-from PyQt6.QtGui import QIntValidator, QPainter, QColor, QIcon
-from PyQt6.QtCore import Qt, QTimer, QPoint, QSize, pyqtSignal
+from PyQt6.QtGui import QIntValidator, QPainter, QColor, QIcon, QDesktopServices
+from PyQt6.QtCore import Qt, QTimer, QPoint, QSize, QUrl, pyqtSignal
 import os
 
 from core.frp_manager import FRPManager
@@ -29,7 +29,7 @@ from core.token_holder import TokenHolder
 from core.token_storage import TokenStorage
 from core.session_manager import SessionManager
 from ui.frosted import apply_frosted
-from core.version import format_version
+from core.version import display_version
 from ui.widgets.controls import ToggleSwitch, InfoDot
 from core.avatar import AvatarLoader
 
@@ -484,11 +484,13 @@ class MainWindow(QMainWindow):
         act_log = menu.addAction("运行日志")
         menu.addSeparator()
         act_update = menu.addAction("检查更新")
+        act_site = menu.addAction("官网")
         act_feedback = menu.addAction("意见反馈")
         act_feedback.setEnabled(False)   # 占位(仅UI)
         about_btn.setMenu(menu)
         act_log.triggered.connect(self.toggle_log_window)
         act_update.triggered.connect(self.check_update)
+        act_site.triggered.connect(self.open_official_site)
         lay.addWidget(about_btn)
 
         lay.addStretch()
@@ -644,13 +646,18 @@ class MainWindow(QMainWindow):
 
         folder = self.cfg.get_static_folder() or self.cfg.get_pref(
             self.cfg.PREF_STATIC_FOLDER, "")
+        folder_exists = bool(folder) and os.path.isdir(folder)
+        if not folder_exists:
+            folder = ""
         state = {"folder": folder}
+
 
         sw_row = QHBoxLayout()
         sw_row.addWidget(QLabel("共享本地文件夹:"))
         sw_row.addStretch()
         switch = ToggleSwitch(dlg)
-        switch.setChecked(self.cfg.is_static_site(), animate=False)   # 持久化: 打开时按文件恢复
+        switch.setChecked(self.cfg.is_static_site() and folder_exists, animate=False)
+
         sw_row.addWidget(switch)
         lay.addLayout(sw_row)
 
@@ -702,8 +709,13 @@ class MainWindow(QMainWindow):
                 path_label.setText("（未选择）")
 
         def on_choose():
-            start = state["folder"] or os.path.expanduser("~")
+            start = state["folder"]
+            if not start or not os.path.isdir(start):
+                start = os.path.expanduser("~")
+            if not os.path.isdir(start):
+                start = ""
             picked = QFileDialog.getExistingDirectory(dlg, "选择要共享的文件夹", start)
+
             if not picked:
                 return
             picked = os.path.abspath(picked).replace("/", "\\")
@@ -970,11 +982,13 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
         self,
         "检查更新",
-        f"当前版本：{format_version()}\n\n"
+        f"当前版本：{display_version()}\n\n"
         "",
     )
 
-
+    def open_official_site(self):
+        """打开官网"""
+        QDesktopServices.openUrl(QUrl("https://sorielflow.com/findex/"))
 
     def toggle_log_window(self):
         if self.log_win is None:
