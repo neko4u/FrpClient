@@ -14,6 +14,31 @@ class ConfigManager:
     def save(self, data):
         with open(self.path, "w", encoding="utf-8") as f:
             toml.dump(data, f)
+    
+    def ensure_server_addr(self):
+        """启动兜底：用 resources/config.json 的 frp_server_addr/port 初始化 frpc.toml。
+
+        为什么需要：frpc.toml 被 .gitignore 排除、不在仓库里，换机重建时没有可靠来源。
+        为什么安全：连接时服务器还会再下发一次（_on_allocate_done 里覆盖），
+        而 frpc 只在 allocate 之后才启动 —— 所以这里写入的旧值不会真正被用上。
+        """
+        try:
+            addr = (self.get_pref("frp_server_addr") or "").strip()
+            if not addr:
+                return False
+            port = int(self.get_pref("frp_server_port") or 0) or 7000
+
+            data = self.load()
+            if data.get("serverAddr") == addr and int(data.get("serverPort") or 0) == port:
+                return False
+            data["serverAddr"] = addr
+            data["serverPort"] = port
+            self.save(data)
+            print("已从 config.json 初始化 frps 控制地址:", addr, port)
+            return True
+        except Exception as e:
+            print("初始化 frps 控制地址失败:", e)
+            return False
 
     def get_basic(self):
         data = self.load()
@@ -254,18 +279,28 @@ class ConfigManager:
                 print("未配置 frp_token_api")
                 return False
 
-            frp_token, err = APIs.fetch_frp_token(api_url, user_token)
+            info, err = APIs.fetch_frp_token(api_url, user_token)
 
-            print("接口返回:", frp_token, err)
+            print("接口返回:", info, err)
 
-            if not frp_token:
+            if not info:
                 print("获取 token 失败:", err)
                 return False
 
-            self.set_token(frp_token)
+            data = self.load()
+            data.setdefault("auth", {})["token"] = info["config_token"]
 
+            # frps 控制地址以服务器下发为准；未下发则保留 frpc.toml 里已有的值
+            addr = (info.get("frps_addr") or "").strip()
+            port = info.get("frps_port") or 0
+            if addr:
+                data["serverAddr"] = addr
+                if port:
+                    data["serverPort"] = int(port)
+                print("已按服务器下发更新 frps 控制地址:", addr, port)
+
+            self.save(data)
             print("写入后的 token:", self.get_token())
-
             return True
 
         except Exception as e:

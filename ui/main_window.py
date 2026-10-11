@@ -902,6 +902,14 @@ class MainWindow(QMainWindow):
             self.cfg.set_remote_port(port)      # 覆盖 frpc.toml 的 remotePort
         except Exception as e:
             print("写入 remotePort 失败:", e)
+            try:
+                frps_addr = (data.get("frps_addr") or "").strip()
+                frps_port = data.get("frps_port") or 0
+                if frps_addr and self.cfg.get_basic()[0] != frps_addr:
+                    self.cfg.set_basic(frps_addr, frps_port or 7000)   # 复用已有方法
+                    print("已更新 frps 控制地址:", frps_addr, frps_port)
+            except Exception as e:
+                print("写入 frps 控制地址失败:", e)
         self._update_addr_label()
         try:
             uid = TokenHolder.get_uid()

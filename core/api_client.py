@@ -39,7 +39,16 @@ class APIs:
             if not data.get("isok"):
                 return None, "接口返回失败"
 
-            return data.get("config_token"), None
+            token = data.get("config_token")
+            if not token or token == "N/A":
+                return None, "服务端未返回有效 token"
+
+            # 服务器下发的 frps 控制地址（迁移后不再依赖打包里硬编码的 IP）
+            return {
+                "config_token": token,
+                "frps_addr": (data.get("frps_addr") or "").strip(),
+                "frps_port": data.get("frps_port") or 0,
+            }, None
 
         except Exception as e:
             return None, str(e)
