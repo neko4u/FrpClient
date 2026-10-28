@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import QTimer
 
 from core import app_log
-from core.net_probe import (L1Probe, OK, WARN, BAD,
+from core.net_probe import (Diagnoser, OK, WARN, BAD,
                             GREEN, YELLOW, RED, UNKNOWN, STATUS_TEXT)
 
 BTN_QSS = """
@@ -59,16 +59,20 @@ RTT_TEXT = {OK: "延迟正常", WARN: "延迟偏高", BAD: "延迟很高", "N/A"
 JIT_TEXT = {OK: "波动正常", WARN: "波动偏大", BAD: "波动很大", "N/A": "波动未知"}
 LOSS_TEXT = {OK: "无丢包", WARN: "轻微丢包", BAD: "明显丢包", "N/A": "丢包未知"}
 OVERALL_TEXT = {OK: "连接质量良好", WARN: "连接质量一般", BAD: "连接质量差"}
+UP_TEXT = {OK: "上行正常", WARN: "上行偏慢", BAD: "上行拥塞", "N/A": "上行未测"}
 
 
 class NetDetailDialog(QDialog):
-    def __init__(self, monitor, targets, parent=None, debug=False):
+    def __init__(self, monitor, targets, parent=None, debug=False,
+                 connected_getter=None, frps_host=""):
         super().__init__(parent)
         self.monitor = monitor
         self.targets = targets
-        self.probe = None
+        self.diag = None
         self.debug = bool(debug)
         self._last_result = None
+        self.connected_getter = connected_getter
+        self.frps_host = frps_host or (targets.get("frps") or ("", 0))[0]
 
         self.setWindowTitle("网络连接测试")
         self.setFixedSize(560, 590)
@@ -223,34 +227,41 @@ class NetDetailDialog(QDialog):
     # ---------------- 主动检测 ----------------
 
     def start_probe(self):
-        if self.probe is not None and not self.probe.done:
+        if self.diag is not None and not self.diag.done:
             return
         self.tabs.setCurrentIndex(0)
         self.result_view.setPlainText("正在检测…")
-        self.progress.setValue(0)
+        self.progress.setRange(0, 0)             # 阶段式检测，用不确定进度条
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.monitor.set_suspended(True)
 
-        self.probe = L1Probe(self.targets, self)
-        self.probe.progress.connect(self.on_progress)
-        self.probe.finished.connect(self.on_finished)
-        self.probe.failed.connect(self.on_failed)
-        self.probe.start()
+        connected = False
+        try:
+            connected = bool(self.connected_getter and self.connected_getter())
+        except Exception:
+            connected = False
+
+        self.diag = Diagnoser(self.targets, frps_host=self.frps_host,
+                              tunnel_connected=connected, parent=self)
+        self.diag.stage.connect(self.on_stage)
+        self.diag.finished.connect(self.on_finished)
+        self.diag.failed.connect(self.on_failed)
+        self.diag.start()
+
+    def on_stage(self, _key, text):
+        self.result_view.setPlainText(text)
 
     def cancel_probe(self):
-        if self.probe is not None:
-            self.probe.cancel()
-
-    def on_progress(self, channel, done, total):
-        base = 0 if channel == "frps" else 20
-        self.progress.setRange(0, 32)
-        self.progress.setValue(base + done)
+        if self.diag is not None:
+            self.diag.cancel()
 
     def on_failed(self, msg):
         self.monitor.set_suspended(False)
         self.start_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
         self.result_view.setPlainText("检测没能完成：%s" % msg)
 
     def on_finished(self, result):
@@ -261,31 +272,37 @@ class NetDetailDialog(QDialog):
         self._last_result = result
         self.result_view.setPlainText(self._render(result))
 
+        l1 = result.get("l1") or {}
+        l3 = result.get("l3") or {}
         app_log.l1_result({
             "overall": result.get("overall"),
             "elapsed": result.get("elapsed"),
-            "note": result.get("note", ""),
+            "attribution": (result.get("attribution") or {}).get("code"),
+            "upload_mbps": l3.get("mbps"),
+            "upload_verdict": l3.get("verdict"),
             "channels": {
                 k: {kk: v.get(kk) for kk in
                     ("sent", "lost", "loss_pct", "rtt_avg", "rtt_p50", "rtt_p95",
                      "jitter", "stop_reason")}
-                for k, v in (result.get("channels") or {}).items()
+                for k, v in (l1.get("channels") or {}).items()
             },
             "verdict": {k: v.get("verdict") for k, v in
-                        (result.get("channels") or {}).items()},
+                        (l1.get("channels") or {}).items()},
         })
         self.reload_history()
 
     def _render(self, r):
-        """普通模式只给结论；调试模式追加原始数字与目标地址"""
+        """普通模式只给结论；调试模式追加原始数字、目标地址与逐跳"""
+        l1 = r.get("l1") or {}
+        l3 = r.get("l3") or {}
         lines = []
+
         for key, caption in (("frps", "隧道通道"), ("django", "平台通道")):
-            ch = (r.get("channels") or {}).get(key)
+            ch = (l1.get("channels") or {}).get(key)
             if not ch:
                 continue
             v = ch.get("verdict") or {}
             lines.append(caption)
-
             if v.get("rtt") == OK and v.get("jitter") == OK and v.get("loss") == OK:
                 lines.append("  延迟、波动、丢包 3 项都正常")
             else:
@@ -293,6 +310,22 @@ class NetDetailDialog(QDialog):
                     RTT_TEXT.get(v.get("rtt"), "延迟未知"),
                     JIT_TEXT.get(v.get("jitter"), "波动未知"),
                     LOSS_TEXT.get(v.get("loss"), "丢包未知")))
+
+            # 上传测速只在隧道通道做
+            if key == "frps":
+                up_v = l3.get("verdict")
+                if l3.get("status") == "skip":
+                    lines.append("  上传：本次跳过")
+                    if self.debug:
+                        lines.append("    原因 %s" % (l3.get("reason") or "-"))
+                elif up_v in (OK, WARN, BAD):
+                    if self.debug:
+                        lines.append("  上传 %s（%.1f Mbps%s，共 %d 档）" % (
+                            UP_TEXT.get(up_v, "上行未测"), l3.get("mbps") or 0,
+                            "，下限估算" if l3.get("estimated") else "",
+                            len(l3.get("stages") or [])))
+                    else:
+                        lines.append("  上传速度：%s" % UP_TEXT.get(up_v, "上行未测"))
 
             if self.debug:
                 host, port = self.targets.get(key, ("-", "-"))
@@ -306,12 +339,31 @@ class NetDetailDialog(QDialog):
                     lines.append("  %s" % ch["stop_reason"])
             lines.append("")
 
+        attr = r.get("attribution") or {}
+        if attr.get("title"):
+            lines.append("结论：%s" % attr["title"])
+        if attr.get("impact"):
+            lines.append("影响：%s" % attr["impact"])
+
+        if self.debug:
+            route = r.get("route") or {}
+            hops = route.get("hops") or []
+            if route.get("error"):
+                lines.append("路由：%s" % route["error"])
+            elif hops:
+                lines.append("路由：")
+                for h in hops[:20]:
+                    rtt = "/".join("%.0f" % x for x in h["rtts"]) or "-"
+                    lines.append("  第%2d 跳  %-12s %s%s" % (
+                        h["hop"], rtt, h["addr"] or "*",
+                        ("   丢 %d" % h["lost"]) if h["lost"] else ""))
+            lines.append("")
+
         overall = "已取消" if r.get("canceled") else OVERALL_TEXT.get(
             r.get("overall"), "结果未知")
         lines.append("总判定：%s" % overall)
         if self.debug:
-            lines.append("用时 %.1fs%s" % (r.get("elapsed") or 0,
-                                         ("，" + r["note"]) if r.get("note") else ""))
+            lines.append("用时 %.1fs" % (r.get("elapsed") or 0))
         return "\n".join(lines)
 
     def reload_history(self):
@@ -334,6 +386,8 @@ class NetDetailDialog(QDialog):
                 else:
                     parts.append("%s %s" % (caption, LOSS_TEXT.get(v.get("loss"), "有异常")))
             lines.append("%s    %s" % (rec.get("_ts", ""), overall))
+            if rec.get("upload_mbps"):
+                parts.append("上行 %.1f Mbps" % rec["upload_mbps"])
             if parts:
                 lines.append("              " + " · ".join(parts))
         self.history_view.setPlainText("\n".join(lines))
@@ -343,8 +397,8 @@ class NetDetailDialog(QDialog):
     def closeEvent(self, event):
         try:
             self._tick.stop()
-            if self.probe is not None and not self.probe.done:
-                self.probe.cancel()
+            if self.diag is not None and not self.diag.done:
+                self.diag.cancel()
         except Exception:
             pass
         super().closeEvent(event)

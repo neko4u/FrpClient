@@ -1361,9 +1361,12 @@ class MainWindow(QMainWindow):
 
     def open_net_detail(self):
         """工具 → 网络连接测试 / 状态灯右侧"详情"：只打开，不自动开测"""
+        targets = self._probe_targets()
         if self.net_detail is None:
-            self.net_detail = NetDetailDialog(self.net, self._probe_targets(), self,
-                                              debug=self.debug_mode)
+            self.net_detail = NetDetailDialog(
+                self.net, targets, self, debug=self.debug_mode,
+                connected_getter=lambda: self.current_status == "connected",
+                frps_host=(targets.get("frps") or ("", 0))[0])
         else:
             self.net_detail.set_debug(self.debug_mode)
             self.net_detail.refresh_passive()
