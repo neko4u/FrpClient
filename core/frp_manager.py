@@ -1,14 +1,21 @@
 from PyQt6.QtCore import QProcess, QObject, QTimer, pyqtSignal
 import os
+import re
+from datetime import datetime
 
 CONNECT_TIMEOUT_MS = 20 * 1000   # 启动后 20s 仍未登录成功 -> 判定连接失败(避免卡在"连接中...")
 STOP_KILL_MS = 3 * 1000          # terminate 后 3s 仍未退出 -> 强杀
+HEARTBEAT_RECV_TIMEOUT_MS = 15 * 1000   # 发出心跳后 15s 没等到回应 -> 记一次超时样本
+
+# frpc 输出带 ANSI 色码, 解析时间戳前要先剥掉
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class FRPManager(QObject):
     # ===== 信号 =====
     log_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)      # stopped / connecting / connected / failed
+    heartbeat_sample = pyqtSignal(float, bool)   # (RTT 毫秒, 是否超时) —— 只给网络质量观测用
 
     def __init__(self, frpc_path, config_path, uid=""):
         super().__init__()
@@ -34,6 +41,13 @@ class FRPManager(QObject):
         self.process.finished.connect(self._on_finished)
         self.process.errorOccurred.connect(self._on_error)
 
+        # 心跳配对状态(被动观测): 记录 send 的时间戳, 等 receive 回来求差
+        self._hb_send_ts = None
+        self._hb_watch = QTimer(self)
+        self._hb_watch.setSingleShot(True)
+        self._hb_watch.setInterval(HEARTBEAT_RECV_TIMEOUT_MS)
+        self._hb_watch.timeout.connect(self._on_hb_timeout)
+
     # ===== 对外 =====
 
     def is_running(self):
@@ -49,6 +63,8 @@ class FRPManager(QObject):
             return "frpc.exe 不存在"
 
         self.logs = []
+        self._hb_send_ts = None
+        self._hb_watch.stop()
         self._set_status("connecting")
 
         args = ["-c", self.config_path]
@@ -103,9 +119,16 @@ class FRPManager(QObject):
     def _on_stdout(self):
         data = self.process.readAllStandardOutput().data().decode(errors="ignore")
 
-        for line in data.splitlines():
-            line = line.strip()
+        for raw in data.splitlines():
+            line = _ANSI_RE.sub("", raw).strip()
             if not line:
+                continue
+
+            # debug/trace 行只用来配对心跳 RTT, 不进日志窗口也不落盘(否则刷屏)
+            if " [D] " in line:
+                self._parse_heartbeat(line)
+                continue
+            if " [T] " in line:
                 continue
 
             self.logs.append(line)
@@ -118,17 +141,55 @@ class FRPManager(QObject):
             elif "connection refused" in low or "login failed" in low:
                 self._connect_timer.stop()
                 self._set_status("failed")
+            elif "heartbeat timeout" in low:
+                self._hb_timeout("frpc 心跳超时")
 
         if len(self.logs) > 500:
             self.logs = self.logs[-500:]
+
+    # ===== 心跳 RTT 配对(被动, 只读日志) =====
+
+    @staticmethod
+    def _log_ts(line):
+        """从 frpc 日志行取毫秒时间戳: '2026-10-28 20:03:33.365 [D] ...' """
+        try:
+            return datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S.%f").timestamp() * 1000.0
+        except Exception:
+            return None
+
+    def _parse_heartbeat(self, line):
+        low = line.lower()
+        if "send heartbeat to server" in low:
+            ts = self._log_ts(line)
+            if ts is not None:
+                self._hb_send_ts = ts
+                self._hb_watch.start()
+        elif "receive heartbeat from server" in low:
+            recv = self._log_ts(line)
+            send = self._hb_send_ts
+            if recv is not None and send is not None:
+                self._hb_send_ts = None
+                self._hb_watch.stop()
+                self.heartbeat_sample.emit(max(0.0, recv - send), False)
+
+    def _hb_timeout(self, _why=""):
+        """心跳没等到回应: 记一次超时样本(不做任何业务动作)"""
+        if self._hb_send_ts is None:
+            return
+        self._hb_send_ts = None
+        self._hb_watch.stop()
+        self.heartbeat_sample.emit(0.0, True)
+
+    def _on_hb_timeout(self):
+        self._hb_timeout()
 
     # ===== stderr 
 
     def _on_stderr(self):
         data = self.process.readAllStandardError().data().decode(errors="ignore")
 
-        for line in data.splitlines():
-            line = line.strip()
+        for raw in data.splitlines():
+            line = _ANSI_RE.sub("", raw).strip()
             if not line:
                 continue
 

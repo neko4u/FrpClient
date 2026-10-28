@@ -6,12 +6,14 @@
   error(str)             错误信息
   session_closed(dict)   会话被服务器关闭(含原因/余额)
 """
-from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, Qt, QElapsedTimer, pyqtSignal
 
 from core.session_api import SessionAPI
 from core.token_holder import TokenHolder
 
 HEARTBEAT_INTERVAL_MS = 30 * 1000   # 30s 心跳
+HEARTBEAT_WATCH_MS = 8 * 1000       # 心跳观测超时: 8s 没回调就记一次"超时样本"
+                                    # (只喂给网络质量统计, 不改变会话/隧道任何行为)
 COUNTDOWN_INTERVAL_MS = 200         # 倒计时轮询 200ms(精确), 秒变才发信号 -> 平滑
 OP_TIMEOUT_MS = 12 * 1000           # start/stop 请求看门狗: 超时则本地复位,
                                     # 避免网络/服务端无响应时按钮永久卡在"处理中..."
@@ -23,6 +25,7 @@ class SessionManager(QObject):
     error = pyqtSignal(str)
     session_closed = pyqtSignal(dict)   # {"reason": str, "balance": int}
     initialized = pyqtSignal()          # status 首次查询完成(成功/失败), 用于移除启动遮罩
+    rtt_sample = pyqtSignal(float, bool)  # (RTT 毫秒, 是否超时) —— 只给网络质量观测用
 
     def __init__(self, api=None):
         super().__init__()
@@ -49,6 +52,14 @@ class SessionManager(QObject):
         self._op_timer.setSingleShot(True)
         self._op_timer.setInterval(OP_TIMEOUT_MS)
         self._op_timer.timeout.connect(self._on_op_timeout)
+
+        # 心跳计时(纯观测): 每次心跳记录耗时, 8s 没回调就记一次超时样本
+        self._hb_clock = QElapsedTimer()
+        self._hb_pending = False
+        self._hb_watch = QTimer(self)
+        self._hb_watch.setSingleShot(True)
+        self._hb_watch.setInterval(HEARTBEAT_WATCH_MS)
+        self._hb_watch.timeout.connect(self._on_hb_watch)
 
 
     # ---------- 对外接口 ----------
@@ -156,6 +167,7 @@ class SessionManager(QObject):
 
 
     def _on_heartbeat(self, data):
+        self._note_hb_reply()
         if data.get("code") != 0:
             self._fail_session(data.get("msg") or "心跳失败")
             return
@@ -182,6 +194,24 @@ class SessionManager(QObject):
         self._teardown()
         self._set_status("idle")
 
+    # ---------- 心跳计时（只观测） ----------
+
+    def _note_hb_reply(self):
+        """心跳有回应: 记一次 RTT 样本（不改任何会话状态）"""
+        if not self._hb_pending:
+            return
+        self._hb_pending = False
+        self._hb_watch.stop()
+        self.rtt_sample.emit(float(self._hb_clock.elapsed()), False)
+
+    def _on_hb_watch(self):
+        """8s 没收到心跳响应: 记一次"超时样本"，然后继续等真响应
+        （真响应回来仍按原逻辑处理，这里不取消请求、不动状态机）"""
+        if not self._hb_pending:
+            return
+        self._hb_pending = False
+        self.rtt_sample.emit(0.0, True)
+
     def _on_op_timeout(self):
         if self._status == "connecting":
             self._teardown()
@@ -199,6 +229,9 @@ class SessionManager(QObject):
         token = TokenHolder.get_token()
         if not token or not self.session_id:
             return
+        self._hb_clock.start()
+        self._hb_pending = True
+        self._hb_watch.start()
         self.api.heartbeat(token, self.session_id, self._on_heartbeat)
 
     def _tick_countdown(self):
@@ -219,6 +252,8 @@ class SessionManager(QObject):
     def _teardown(self):
         self._hb_timer.stop()
         self._cd_timer.stop()
+        self._hb_watch.stop()
+        self._hb_pending = False
         self.session_id = ""
         self.stop_time_ts = 0
 

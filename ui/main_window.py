@@ -32,6 +32,11 @@ from ui.frosted import apply_frosted
 from core.version import display_version
 from ui.widgets.controls import ToggleSwitch, InfoDot
 from core.avatar import AvatarLoader
+from core import app_log
+from core.net_probe import PassiveMonitor, GREEN, YELLOW, RED, UNKNOWN
+from core.session_api import BASE_URL
+from ui.log_viewer import LogViewerWindow
+from ui.net_detail import NetDetailDialog
 
 
 
@@ -232,6 +237,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("sorielconnection")
+
+        # 需求1: 去掉最大化/全屏能力 —— 客户区是固定 495x289 的便携窗, 不该能拉大。
+        # 必须在 apply_frosted 之前清, 否则它的 ExpandedClientAreaHint 会把按钮带回来。
+        flags = self.windowFlags()
+        flags &= ~Qt.WindowType.WindowMaximizeButtonHint
+        flags &= ~Qt.WindowType.WindowFullscreenButtonHint
+        self.setWindowFlags(flags)
+
         apply_frosted(self)
 
         # 固定窗口尺寸(客户区 495x289 —— 截图整窗 495x320 减去系统标题栏 31px),
@@ -249,6 +262,22 @@ class MainWindow(QMainWindow):
             TokenHolder.get_uid()
         )
         self.cfg = ConfigManager(os.path.join(resource_dir(), "frpc.toml"))
+        # A 方案: 让 frpc 打出心跳日志(只加配置键, tcpMux 保持默认, 不改传输方式)
+        try:
+            self.cfg.ensure_network_probe()
+        except Exception as e:
+            print("写入网络观测配置失败:", e)
+
+        # 被动网络观测: 只吃心跳/日志信号, 不干预会话与隧道
+        self.net = PassiveMonitor(self)
+        self.net_detail = None          # 子页面(懒创建)
+        self.log_viewer = None          # 历史日志窗口(懒创建)
+        # 调试模式: 关着时界面只给结论, 不显示 RTT/基线/样本/目标地址
+        try:
+            self.debug_mode = bool(self.cfg.get_pref("debug_mode", False))
+        except Exception:
+            self.debug_mode = False
+
         self.current_status = "stopped"
         self.remote_port = 0            # 服务器分配的远程端口
         self.frp_host = ""              # 对外访问域名
@@ -346,6 +375,19 @@ class MainWindow(QMainWindow):
         conn_row.addWidget(self.status_light)
         self.status_text = QLabel("未连接")
         conn_row.addWidget(self.status_text)
+
+        # 需求4: 状态灯右侧"详情", 进子页面看被动明细并做主动检测
+        conn_row.addSpacing(4)
+        self.net_btn = QPushButton("详情")
+        self.net_btn.setFixedSize(52, 24)
+        self.net_btn.setStyleSheet(
+            "QPushButton{background:#ffffff;border:1px solid #cfd8e3;border-radius:5px;"
+            "font-size:11px;color:#25303f;}"
+            "QPushButton:hover{border:1px solid #9fc0e8;}")
+        self.net_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.net_btn.clicked.connect(self.open_net_detail)
+        conn_row.addWidget(self.net_btn)
+
         conn_row.addStretch()
         body_lay.addLayout(conn_row)
 
@@ -406,7 +448,20 @@ class MainWindow(QMainWindow):
         self.frp.log_signal.connect(self.append_log)
         self.frp.status_signal.connect(self.on_frp_status)
 
+        # 网络观测接线(只读信号 -> 观察器; 观察器不发包、不改状态)
+        self.frp.heartbeat_sample.connect(self.net.feed_frps)
+        self.session.rtt_sample.connect(self.net.feed_django)
+        self.net.changed.connect(self.on_net_changed)
+
         # ================= 初始化 =================
+        try:
+            removed = app_log.cleanup()          # 清掉超 7 天的日志
+            app_log.app("启动 SorielConnection %s   日志目录 %s%s" % (
+                display_version(), app_log.log_dir(),
+                ("   清理旧日志 %d 个" % len(removed)) if removed else ""))
+        except Exception as e:
+            print("日志初始化失败:", e)
+
         self.load()
         self._apply_ui_state()
 
@@ -446,6 +501,48 @@ class MainWindow(QMainWindow):
             self._loading_mask.deleteLater()
             self._loading_mask = None
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 窗口真正建立后才能改 Win32 样式，延后一拍执行
+        QTimer.singleShot(0, self._strip_max_button)
+
+    def _strip_max_button(self):
+        """Win32 硬清"最大化 + 可拉伸"样式位
+
+        Qt 的 WindowMaximizeButtonHint 在"DWM 自绘标题栏 + setFixedSize"组合下有概率不生效
+        （按钮还在、点一下还会抽），所以直接改窗口样式位：清掉 WS_MAXIMIZEBOX/WS_THICKFRAME，
+        再 FRAMECHANGED 让系统重画一次标题栏。
+        """
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            GWL_STYLE = -16
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_THICKFRAME = 0x00040000
+            SWP_FLAGS = 0x0001 | 0x0002 | 0x0004 | 0x0020   # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
+
+            user32 = ctypes.windll.user32
+            hwnd = ctypes.c_void_p(int(self.winId()))
+
+            if hasattr(user32, "GetWindowLongPtrW"):
+                get_long, set_long = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
+            else:
+                get_long, set_long = user32.GetWindowLongW, user32.SetWindowLongW
+            get_long.restype = ctypes.c_ssize_t
+            get_long.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            set_long.restype = ctypes.c_ssize_t
+            set_long.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+
+            style = get_long(hwnd, GWL_STYLE)
+            new_style = style & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME
+            if new_style != style:
+                set_long(hwnd, GWL_STYLE, new_style)
+                user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FLAGS)
+        except Exception as e:
+            print("去掉最大化按钮失败:", e)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         m = getattr(self, "_loading_mask", None)
@@ -469,32 +566,55 @@ class MainWindow(QMainWindow):
 
         lay.addSpacing(18)
 
-        # "关于" 下拉菜单(靠左, logo 右侧)
-        about_btn = QToolButton()
-        about_btn.setText("关于")
-        about_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        about_btn.setArrowType(Qt.ArrowType.DownArrow)
-        about_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        about_btn.setStyleSheet(
-            "QToolButton{border:none;font-size:13px;color:#333;padding:2px 6px;}"
-            "QToolButton::menu-indicator{image:none;}")
-        menu = QMenu(about_btn)
-        menu.setStyleSheet(MENU_QSS)
+        # 需求2: "工具" 菜单放在 "关于" 左侧；只留一个入口，
+        # 进去之后自己点「开始检测」，也能在页签里看历史记录
+        tool_btn, tool_menu = self._menu_button("工具")
+        act_net_test = tool_menu.addAction("网络连接测试")
+        act_net_test.triggered.connect(lambda *_: self.open_net_detail())
+        lay.addWidget(tool_btn)
+
+        # "关于" 下拉菜单
+        about_btn, menu = self._menu_button("关于")
 
         act_log = menu.addAction("运行日志")
+        act_hist = menu.addAction("历史日志（近 7 天）")
+        act_logdir = menu.addAction("打开日志目录")
+        menu.addSeparator()
+
+        act_debug = menu.addAction("调试模式")
+        act_debug.setCheckable(True)
+        act_debug.setChecked(bool(getattr(self, "debug_mode", False)))
+        act_debug.toggled.connect(self.on_debug_toggled)
+
         menu.addSeparator()
         act_update = menu.addAction("检查更新")
         act_site = menu.addAction("官网")
         act_feedback = menu.addAction("意见反馈")
         act_feedback.setEnabled(False)   # 占位(仅UI)
-        about_btn.setMenu(menu)
         act_log.triggered.connect(self.toggle_log_window)
+        act_hist.triggered.connect(lambda *_: self.open_log_viewer())
+        act_logdir.triggered.connect(lambda *_: self.open_log_dir())
         act_update.triggered.connect(self.check_update)
         act_site.triggered.connect(self.open_official_site)
         lay.addWidget(about_btn)
 
         lay.addStretch()
         return bar
+
+    def _menu_button(self, text):
+        """顶部下拉菜单按钮(磨砂窗里的弹出菜单必须实底, 见 MENU_QSS)"""
+        btn = QToolButton()
+        btn.setText(text)
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn.setArrowType(Qt.ArrowType.DownArrow)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        btn.setStyleSheet(
+            "QToolButton{border:none;font-size:13px;color:#333;padding:2px 6px;}"
+            "QToolButton::menu-indicator{image:none;}")
+        menu = QMenu(btn)
+        menu.setStyleSheet(MENU_QSS)
+        btn.setMenu(menu)
+        return btn, menu
 
     def _build_avatar_menu(self):
         """头像弹层: 用户ID + 登出; 点击外部自动隐藏"""
@@ -983,8 +1103,13 @@ class MainWindow(QMainWindow):
     # ---------------- 日志(独立窗口, toggle) ----------------
 
     def append_log(self, line):
+        """运行日志(内存, 不落盘) + 持久化日志(落盘, 7 天)"""
         if self.log_win is not None:
             self.log_win.append(line)
+        try:
+            app_log.frpc_line(line)
+        except Exception:
+            pass
 
     def check_update(self):
         QMessageBox.information(
@@ -1033,6 +1158,10 @@ class MainWindow(QMainWindow):
 
     def on_session_status(self, status):
         self._apply_ui_state()
+        try:
+            app_log.session(status)
+        except Exception:
+            pass
         if status == "active":
             self._sync_port_from_server()
         if status == "error" and self.current_status in ("connecting", "connected"):
@@ -1101,6 +1230,12 @@ class MainWindow(QMainWindow):
     def on_frp_status(self, status):
         """frpc 状态变化 -> 驱动按钮动画/文本"""
         self.current_status = status
+        try:
+            app_log.frp(status)
+        except Exception:
+            pass
+        if status in ("stopped", "failed"):
+            self.net.reset()        # 断开后不要拿旧基线去判下一次连接
 
         if status == "connecting":
             # 连接中: 若按钮未在动画则启动(兜底), 保持禁用
@@ -1166,25 +1301,103 @@ class MainWindow(QMainWindow):
             self.frp_btn.setText("连接")
             self.frp_btn.setEnabled(self.session.status == "active")
 
-        # 指示灯
-        if self.current_status == "connecting":
-            self.status_light.setStyleSheet("color: orange; font-size: 16px;")
-            self.status_text.setText("连接中")
-        elif self.current_status == "connected":
-            self.status_light.setStyleSheet("color: green; font-size: 16px;")
-            self.status_text.setText("已连接")
-        elif self.current_status == "failed":
-            self.status_light.setStyleSheet("color: red; font-size: 16px;")
-            self.status_text.setText("连接失败")
-        else:
-            self.status_light.setStyleSheet("color: gray; font-size: 16px;")
-            self.status_text.setText("未连接")
+        # 指示灯（过程态 + 网络质量，靠文字区分含义）
+        self._paint_status()
 
         # 时间显示: connecting/stopping -> 加载中; idle -> 余额; active -> 倒计时
         if self.session.status in ("connecting", "stopping"):
             self._show_loading()
         elif self.session.status != "active":
             self._show_balance_only()
+
+    # ---------------- 网络状态灯 / 网络子页面（只显示，不动业务） ----------------
+
+    def _paint_status(self):
+        """灯色沿用原有四态；已连接时按网络质量切黄/红，靠文字区分含义：
+           红 + "连接失败" = frpc 连不上          红 + "网不好"   = 链路差
+           橙 = 连接中（很短）                    灰 = 未连接/会话已断
+        """
+        st = self.current_status
+        if st == "connecting":
+            self.status_light.setStyleSheet("color: orange; font-size: 16px;")
+            self.status_text.setText("连接中")
+            return
+
+        if st == "connected":
+            worst = self.net.worst() if getattr(self, "net", None) else UNKNOWN
+            if worst == RED:
+                self.status_light.setStyleSheet("color: red; font-size: 16px;")
+                self.status_text.setText("网不好")
+            elif worst == YELLOW:
+                self.status_light.setStyleSheet("color: #e0a63c; font-size: 16px;")
+                self.status_text.setText("网络一般")
+            else:
+                self.status_light.setStyleSheet("color: green; font-size: 16px;")
+                self.status_text.setText("已连接")
+            return
+
+        if st == "failed":
+            self.status_light.setStyleSheet("color: red; font-size: 16px;")
+            self.status_text.setText("连接失败")
+            return
+
+        self.status_light.setStyleSheet("color: gray; font-size: 16px;")
+        self.status_text.setText("未连接")
+
+    def on_net_changed(self, _snapshot):
+        if self.current_status == "connected":
+            self._paint_status()
+        if self.net_detail is not None and self.net_detail.isVisible():
+            self.net_detail.refresh_passive()
+
+    def _probe_targets(self):
+        """L1 探测目标：frps 控制口(业务无感) + Django 的 443 握手(纯网络 RTT)"""
+        try:
+            host, port = self.cfg.get_basic()
+        except Exception:
+            host, port = "", 0
+        dj_host = QUrl(BASE_URL).host() or "sorielflow.com"
+        return {"frps": (host or "", int(port or 0)), "django": (dj_host, 443)}
+
+    def open_net_detail(self):
+        """工具 → 网络连接测试 / 状态灯右侧"详情"：只打开，不自动开测"""
+        if self.net_detail is None:
+            self.net_detail = NetDetailDialog(self.net, self._probe_targets(), self,
+                                              debug=self.debug_mode)
+        else:
+            self.net_detail.set_debug(self.debug_mode)
+            self.net_detail.refresh_passive()
+        self.net_detail.show()
+        self.net_detail.raise_()
+        self.net_detail.activateWindow()
+
+    def on_debug_toggled(self, on):
+        """调试模式开关：只影响显示，不改任何检测逻辑"""
+        self.debug_mode = bool(on)
+        try:
+            self.cfg.set_pref("debug_mode", self.debug_mode)
+        except Exception:
+            pass
+        if self.net_detail is not None:
+            self.net_detail.set_debug(self.debug_mode)
+
+    def open_log_viewer(self):
+        if self.log_viewer is None:
+            self.log_viewer = LogViewerWindow()
+        else:
+            self.log_viewer.reload()
+        self.log_viewer.show()
+        self.log_viewer.raise_()
+        self.log_viewer.activateWindow()
+
+    def open_log_dir(self):
+        path = app_log.log_dir()
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            pass
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.information(self, "提示", "无法打开日志目录：\n%s" % path)
 
     def _show_balance_only(self):
         b = getattr(self.session, "balance", 0)

@@ -40,6 +40,60 @@ class ConfigManager:
             print("初始化 frps 控制地址失败:", e)
             return False
 
+    # ---- 被动网络观测: 让 frpc 打出心跳日志（只加配置键, 不改传输方式） ----
+
+    def ensure_network_probe(self):
+        """写入网络观测必需的两段 frpc 配置：
+
+            [log]       level = "debug"
+            [transport] heartbeatInterval = 30
+                        heartbeatTimeout  = 90
+
+        为什么必须显式写：frp v0.65 的 ClientTransportConfig.Complete() 在
+        tcpMux(默认 true) 开启时把 HeartbeatInterval / HeartbeatTimeout 置为 -1，
+        即应用层 Ping/Pong 被关闭、交给 TCPMux 自己的 keepalive —— 那一层不产生
+        任何日志，不写这两项就一条心跳行都读不到。
+        这里只新增配置键，tcpMux 保持默认，隧道数据路径不变。
+        """
+        import os
+        try:
+            if not os.path.exists(self.path):
+                return False
+            try:
+                data = self.load()
+            except Exception:
+                return False
+
+            changed = False
+
+            log_cfg = data.get("log")
+            if not isinstance(log_cfg, dict):
+                log_cfg = {}
+            if log_cfg.get("level") != "debug":
+                log_cfg["level"] = "debug"
+                changed = True
+            data["log"] = log_cfg
+
+            tr = data.get("transport")
+            if not isinstance(tr, dict):
+                tr = {}
+            if int(tr.get("heartbeatInterval") or 0) != 30:
+                tr["heartbeatInterval"] = 30
+                changed = True
+            if int(tr.get("heartbeatTimeout") or 0) != 90:
+                tr["heartbeatTimeout"] = 90
+                changed = True
+            data["transport"] = tr
+
+            if changed:
+                self.save(data)
+                print("已写入网络观测配置: log.level=debug, "
+                      "transport.heartbeatInterval=30, heartbeatTimeout=90")
+            return changed
+        except Exception as e:
+            print("写入网络观测配置失败:", e)
+            return False
+
     def get_basic(self):
         data = self.load()
         return data.get("serverAddr"), data.get("serverPort")
